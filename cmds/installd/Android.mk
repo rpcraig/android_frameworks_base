@@ -29,7 +29,7 @@ LOCAL_SRC_FILES := \
     $(common_src_files)
 
 LOCAL_SHARED_LIBRARIES := \
-    libcutils
+    libcutils libselinux
 
 LOCAL_STATIC_LIBRARIES := \
     libdiskusage

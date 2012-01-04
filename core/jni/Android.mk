@@ -155,7 +155,8 @@ LOCAL_SRC_FILES:= \
 	android_app_backup_FullBackup.cpp \
 	android_content_res_ObbScanner.cpp \
 	android_content_res_Configuration.cpp \
-    android_animation_PropertyValuesHolder.cpp
+    android_animation_PropertyValuesHolder.cpp \
+	gov_android_selinux_SELinuxCommon.cpp
 
 LOCAL_C_INCLUDES += \
 	$(JNI_H_INCLUDE) \
@@ -184,7 +185,8 @@ LOCAL_C_INCLUDES += \
 	external/harfbuzz/src \
 	external/zlib \
 	frameworks/opt/emoji \
-	libcore/include
+	libcore/include \
+	external/libselinux/include \
 
 LOCAL_SHARED_LIBRARIES := \
 	libexpat \
@@ -217,6 +219,7 @@ LOCAL_SHARED_LIBRARIES := \
 	libusbhost \
 	libharfbuzz \
 	libz \
+	libselinux \
 
 ifeq ($(USE_OPENGL_RENDERER),true)
 	LOCAL_SHARED_LIBRARIES += libhwui

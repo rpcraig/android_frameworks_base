@@ -285,10 +285,11 @@ public class Process {
                                   final String niceName,
                                   int uid, int gid, int[] gids,
                                   int debugFlags, int targetSdkVersion,
+  				  String[] spawnerArgs,		 
                                   String[] zygoteArgs) {
         try {
             return startViaZygote(processClass, niceName, uid, gid, gids,
-                    debugFlags, targetSdkVersion, zygoteArgs);
+		  debugFlags, targetSdkVersion, spawnerArgs, zygoteArgs);
         } catch (ZygoteStartFailedEx ex) {
             Log.e(LOG_TAG,
                     "Starting VM process through Zygote failed");
@@ -460,6 +461,7 @@ public class Process {
                                   final int uid, final int gid,
                                   final int[] gids,
                                   int debugFlags, int targetSdkVersion,
+				  String[] spawnerArgs,
                                   String[] extraArgs)
                                   throws ZygoteStartFailedEx {
         synchronized(Process.class) {
@@ -510,6 +512,11 @@ public class Process {
                 argsForZygote.add("--nice-name=" + niceName);
             }
 
+            if (spawnerArgs != null) {
+                for (String arg : spawnerArgs) {
+                    argsForZygote.add(arg);
+                }
+            }
             argsForZygote.add(processClass);
 
             if (extraArgs != null) {

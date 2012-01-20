@@ -66,6 +66,7 @@ LOCAL_SRC_FILES:= \
 	android_os_MessageQueue.cpp \
 	android_os_ParcelFileDescriptor.cpp \
 	android_os_Power.cpp \
+	android_os_SELinux.cpp \
 	android_os_StatFs.cpp \
 	android_os_SystemClock.cpp \
 	android_os_SystemProperties.cpp \
@@ -155,8 +156,7 @@ LOCAL_SRC_FILES:= \
 	android_app_backup_FullBackup.cpp \
 	android_content_res_ObbScanner.cpp \
 	android_content_res_Configuration.cpp \
-    android_animation_PropertyValuesHolder.cpp \
-	gov_android_selinux_SELinuxCommon.cpp
+    android_animation_PropertyValuesHolder.cpp
 
 LOCAL_C_INCLUDES += \
 	$(JNI_H_INCLUDE) \

@@ -1,4 +1,4 @@
-#define LOG_TAG "SELinuxCommonJNI"
+#define LOG_TAG "SELinuxJNI"
 #include <utils/Log.h>
 
 #include "JNIHelp.h"
@@ -34,13 +34,13 @@ namespace android {
   }
 
   /*
-   * Function: getSELinuxEnforce
-   * Purpose: return the current SE Linux enforce mode
+   * Function: isSELinuxEnforced
+   * Purpose: return the current SELinux enforce mode
    * Parameters: none
    * Return value: true (enforcing) or false (permissive)
    * Exceptions: none
    */
-  static jboolean getSELinuxEnforce(JNIEnv *env, jobject clazz) {
+  static jboolean isSELinuxEnforced(JNIEnv *env, jobject clazz) {
 
     int seLinuxEnforce = security_getenforce();
     if(seLinuxEnforce == -1) {
@@ -51,7 +51,7 @@ namespace android {
 
     return (seLinuxEnforce == 1) ? true : false;
   }
-  
+
   /*
    * Function: getPeerCon
    * Purpose: retrieves security context of peer socket
@@ -100,8 +100,8 @@ namespace android {
    * Function: setFSCreateCon
    * Purpose: set security context used for creating a new file system object
    * Parameters:
-   *       context: security_context_t representing the new context of a file system object, 
-   *	            set to NULL to return to the default policy behavior
+   *       context: security_context_t representing the new context of a file system object,
+   *                set to NULL to return to the default policy behavior
    * Returns: true on success, false on error
    * Exception: none
    */
@@ -109,7 +109,7 @@ namespace android {
 
     char * securityContext = NULL;
     const char *constant_securityContext = NULL;
-    
+
     if(context != NULL) {
       constant_securityContext = env->GetStringUTFChars(context, NULL);
 
@@ -137,7 +137,7 @@ namespace android {
    * Function: setFileCon
    * Purpose:  set the security context of a file object
    * Parameters:
-   *       path: the location of the file system object 
+   *       path: the location of the file system object
    *       con: the new security context of the file system object
    * Returns: 0 on success, -1 on error
    * Exception: NullPointerException is thrown if either path or context strign are NULL
@@ -146,7 +146,7 @@ namespace android {
 
     if(path == NULL) {
       throw_NullPointerException(env, "Trying to change the security context of a NULL file object.");
-      return false; 
+      return false;
     }
 
     if(con == NULL) {
@@ -162,8 +162,7 @@ namespace android {
 
     int ret = setfilecon(objectPath, newCon);
     if(ret == -1) {
-      LOGE("setFileCon: Error setting security context '%s' for '%s' (%s)",
-	   newCon, objectPath, strerror(errno));
+      LOGE("setFileCon: Error setting security context '%s' for '%s' (%s)", newCon, objectPath, strerror(errno));
       goto bail;
     }
 
@@ -178,7 +177,7 @@ namespace android {
   /*
    * Function: getFileCon
    * Purpose: retrieves the context associated with the given path in the file system
-   * Parameters: 
+   * Parameters:
    *        path: given path in the file system
    * Returns:
    *        string representing the security context string of the file object
@@ -241,14 +240,14 @@ namespace android {
   bail:
     if(context != NULL)
       freecon(context);
-    
+
     return securityString;
   }
 
   /*
    * Function: getPidCon
    * Purpose: Get the context of a process identified by its pid
-   * Parameters: 
+   * Parameters:
    *            pid: a jint representing the process
    * Returns: a jstring representing the security context of the pid,
    *          the jstring may be NULL if there was an error
@@ -273,7 +272,7 @@ namespace android {
   bail:
     if(context != NULL)
       freecon(context);
-    
+
     return securityString;
   }
 
@@ -291,15 +290,15 @@ namespace android {
   static JNINativeMethod method_table[] = {
 
     /* name,                     signature,                    funcPtr */
-    { "getSELinuxEnforce" ,  "()Z"                  , (void*)getSELinuxEnforce  },
-    { "isSELinuxEnabled"  ,  "()Z"                  , (void*)isSELinuxEnabled   },
-    { "setFSCreateCon"    ,  "(Ljava/lang/String;)Z", (void*)setFSCreateCon     }, 
-    { "getCon"         ,  "()Ljava/lang/String;", (void*)getCon          },
-    { "getPidCon"         ,  "(I)Ljava/lang/String;", (void*)getPidCon          },
-    { "setFileCon"        ,  "(Ljava/lang/String;Ljava/lang/String;)Z"      , (void*)setFileCon },
-    { "getFileCon"        ,  "(Ljava/lang/String;)Ljava/lang/String;"       , (void*)getFileCon },    
-    { "getPeerCon"        ,  "(Ljava/io/FileDescriptor;)Ljava/lang/String;" , (void*)getPeerCon },    
-    { "checkSELinuxAccess"        ,  "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z" , (void*)checkSELinuxAccess },    
+    { "checkSELinuxAccess"       , "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z" , (void*)checkSELinuxAccess },
+    { "getContext"               , "()Ljava/lang/String;"                         , (void*)getCon           },
+    { "getFileContext"           , "(Ljava/lang/String;)Ljava/lang/String;"       , (void*)getFileCon       },
+    { "getPeerContext"           , "(Ljava/io/FileDescriptor;)Ljava/lang/String;" , (void*)getPeerCon       },
+    { "getPidContext"            , "(I)Ljava/lang/String;"                        , (void*)getPidCon        },
+    { "isSELinuxEnforced"        , "()Z"                                          , (void*)isSELinuxEnforced},
+    { "isSELinuxEnabled"         , "()Z"                                          , (void*)isSELinuxEnabled },
+    { "setFileContext"           , "(Ljava/lang/String;Ljava/lang/String;)Z"      , (void*)setFileCon       },
+    { "setFSCreateContext"       , "(Ljava/lang/String;)Z"                        , (void*)setFSCreateCon   },
   };
 
   static int log_callback(int type, const char *fmt, ...) {
@@ -310,12 +309,12 @@ namespace android {
     return 0;
   }
 
-  int register_gov_android_selinux_SELinuxCommon(JNIEnv *env) {
+  int register_android_os_SELinux(JNIEnv *env) {
     union selinux_callback cb;
     cb.func_log = log_callback;
     selinux_set_callback(SELINUX_CB_LOG, cb);
     return AndroidRuntime::registerNativeMethods(
-	 env, "gov/android/selinux/SELinuxCommon",
-	 method_table, NELEM(method_table));
+         env, "android/os/SELinux",
+         method_table, NELEM(method_table));
   }
 }

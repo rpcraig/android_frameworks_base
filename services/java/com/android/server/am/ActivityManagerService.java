@@ -1960,17 +1960,18 @@ public final class ActivityManagerService extends ActivityManagerNative
                 debugFlags |= Zygote.DEBUG_ENABLE_ASSERT;
             }
 
-	    String [] spawnerArgs;
-	    if ((app.info.flags & ApplicationInfo.FLAG_SYSTEM) != 0) {
-		spawnerArgs = new String[] { "--seinfo=systemApp" };
-	    } else
-		spawnerArgs = null;
+            String seInfo;
+            if ((app.info.flags & ApplicationInfo.FLAG_SYSTEM) != 0) {
+                seInfo = "systemApp";
+            } else {
+                seInfo = null;
+            }
 
             // Start the process.  It will either succeed and return a result containing
             // the PID of the new process, or else throw a RuntimeException.
             Process.ProcessStartResult startResult = Process.start("android.app.ActivityThread",
                     app.processName, uid, uid, gids, debugFlags,
-                    app.info.targetSdkVersion, spawnerArgs, null);
+                    app.info.targetSdkVersion, seInfo, null);
 
             BatteryStatsImpl bs = app.batteryStats.getBatteryStats();
             synchronized (bs) {

@@ -613,7 +613,8 @@ class ZygoteConnection {
      * @param peer non-null; peer credentials
      * @throws ZygoteSecurityException
      */
-    private static void applyUidSecurityPolicy(Arguments args, Credentials peer, String peerSecurityContext)
+    private static void applyUidSecurityPolicy(Arguments args, Credentials peer,
+            String peerSecurityContext)
             throws ZygoteSecurityException {
 
         int peerUid = peer.getUid();
@@ -800,7 +801,8 @@ class ZygoteConnection {
      * @param peer non-null; peer credentials
      * @throws ZygoteSecurityException
      */
-    private static void applyInvokeWithSecurityPolicy(Arguments args, Credentials peer, String peerSecurityContext)
+    private static void applyInvokeWithSecurityPolicy(Arguments args, Credentials peer,
+            String peerSecurityContext)
             throws ZygoteSecurityException {
         int peerUid = peer.getUid();
 

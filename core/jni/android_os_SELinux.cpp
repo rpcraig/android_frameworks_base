@@ -4,7 +4,9 @@
 #include "JNIHelp.h"
 #include "jni.h"
 #include "android_runtime/AndroidRuntime.h"
+#ifdef HAVE_SELINUX
 #include "selinux/selinux.h"
+#endif
 #include <errno.h>
 
 namespace android {
@@ -22,7 +24,7 @@ namespace android {
    * Exceptions: none
    */
   static jboolean isSELinuxEnabled(JNIEnv *env, jobject classz) {
-
+#ifdef HAVE_SELINUX
     int seLinuxEnabled = is_selinux_enabled();
     if(seLinuxEnabled == -1) {
       LOGE("Error retrieving SELinux enabled status (%s)", strerror(errno));
@@ -31,6 +33,9 @@ namespace android {
     LOGV("is_selinux_enabled returned %d", seLinuxEnabled);
 
     return (seLinuxEnabled == 1) ? true : false;
+#else
+    return false;
+#endif
   }
 
   /*
@@ -41,7 +46,7 @@ namespace android {
    * Exceptions: none
    */
   static jboolean isSELinuxEnforced(JNIEnv *env, jobject clazz) {
-
+#ifdef HAVE_SELINUX
     int seLinuxEnforce = security_getenforce();
     if(seLinuxEnforce == -1) {
       LOGE("Error retrieving SELinux enforce mode (%s)", strerror(errno));
@@ -50,6 +55,9 @@ namespace android {
     LOGV("security_getenforce returned %d", seLinuxEnforce);
 
     return (seLinuxEnforce == 1) ? true : false;
+#else
+    return false;
+#endif
   }
 
   /*
@@ -61,7 +69,7 @@ namespace android {
    * Exceptions: NullPointerException if fileDescriptor object is NULL
    */
   static jstring getPeerCon(JNIEnv *env, jobject clazz, jobject fileDescriptor) {
-
+#ifdef HAVE_SELINUX
     if(fileDescriptor == NULL) {
       throw_NullPointerException(env, "Trying to check security context of a null peer socket.");
       return NULL;
@@ -94,6 +102,9 @@ namespace android {
       freecon(context);
 
     return securityString;
+#else
+    return NULL;
+#endif
   }
 
   /*
@@ -106,7 +117,7 @@ namespace android {
    * Exception: none
    */
   static jboolean setFSCreateCon(JNIEnv *env, jobject clazz, jstring context) {
-
+#ifdef HAVE_SELINUX
     char * securityContext = NULL;
     const char *constant_securityContext = NULL;
 
@@ -131,6 +142,9 @@ namespace android {
       env->ReleaseStringUTFChars(context, constant_securityContext);
 
     return (ret == 0) ? true : false;
+#else
+    return false;
+#endif
   }
 
   /*
@@ -143,7 +157,7 @@ namespace android {
    * Exception: NullPointerException is thrown if either path or context strign are NULL
    */
   static jboolean setFileCon(JNIEnv *env, jobject clazz, jstring path, jstring con) {
-
+#ifdef HAVE_SELINUX
     if(path == NULL) {
       throw_NullPointerException(env, "Trying to change the security context of a NULL file object.");
       return false;
@@ -172,6 +186,9 @@ namespace android {
     env->ReleaseStringUTFChars(path, objectPath);
     env->ReleaseStringUTFChars(con, constant_con);
     return (ret == 0) ? true : false;
+#else
+    return false;
+#endif
   }
 
   /*
@@ -185,7 +202,7 @@ namespace android {
    * Exceptions: NullPointerException if the path object is null
    */
   static jstring getFileCon(JNIEnv *env, jobject clazz, jstring path) {
-
+#ifdef HAVE_SELINUX
     if(path == NULL) {
       throw_NullPointerException(env, "Trying to check security context of a null path.");
       return NULL;
@@ -213,6 +230,9 @@ namespace android {
     env->ReleaseStringUTFChars(path, objectPath);
 
     return securityString;
+#else
+    return NULL;
+#endif
   }
 
   /*
@@ -224,7 +244,7 @@ namespace android {
    * Exceptions: none
    */
   static jstring getCon(JNIEnv *env, jobject clazz) {
-
+#ifdef HAVE_SELINUX
     security_context_t context = NULL;
     jstring securityString = NULL;
 
@@ -242,6 +262,9 @@ namespace android {
       freecon(context);
 
     return securityString;
+#else
+    return NULL;
+#endif
   }
 
   /*
@@ -254,7 +277,7 @@ namespace android {
    * Exceptions: none
    */
   static jstring getPidCon(JNIEnv *env, jobject clazz, jint pid) {
-
+#ifdef HAVE_SELINUX
     security_context_t context = NULL;
     jstring securityString = NULL;
 
@@ -274,14 +297,21 @@ namespace android {
       freecon(context);
 
     return securityString;
+#else
+    return NULL;
+#endif
   }
 
   static jboolean checkSELinuxAccess(JNIEnv *env, jobject clazz, jstring scon, jstring tcon, jstring tclass, jstring perm) {
+#ifdef HAVE_SELINUX
     char *myscon = const_cast<char *> (env->GetStringUTFChars(scon, NULL));
     char *mytcon = const_cast<char *> (env->GetStringUTFChars(tcon, NULL));
     const char *mytclass = env->GetStringUTFChars(tclass, NULL);
     const char *myperm = env->GetStringUTFChars(perm, NULL);
     return (selinux_check_access(myscon, mytcon, mytclass, myperm, NULL) == 0) ? true : false;
+#else
+    return true;
+#endif
   }
 
   /*
@@ -310,9 +340,11 @@ namespace android {
   }
 
   int register_android_os_SELinux(JNIEnv *env) {
+#ifdef HAVE_SELINUX
     union selinux_callback cb;
     cb.func_log = log_callback;
     selinux_set_callback(SELINUX_CB_LOG, cb);
+#endif
     return AndroidRuntime::registerNativeMethods(
          env, "android/os/SELinux",
          method_table, NELEM(method_table));

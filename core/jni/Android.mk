@@ -185,8 +185,7 @@ LOCAL_C_INCLUDES += \
 	external/harfbuzz/src \
 	external/zlib \
 	frameworks/opt/emoji \
-	libcore/include \
-	external/libselinux/include \
+	libcore/include
 
 LOCAL_SHARED_LIBRARIES := \
 	libexpat \
@@ -218,8 +217,13 @@ LOCAL_SHARED_LIBRARIES := \
 	libnfc_ndef \
 	libusbhost \
 	libharfbuzz \
-	libz \
-	libselinux \
+	libz
+
+ifeq ($(HAVE_SELINUX),true)
+LOCAL_C_INCLUDES += external/libselinux/include
+LOCAL_SHARED_LIBRARIES += libselinux
+LOCAL_CFLAGS += -DHAVE_SELINUX
+endif # HAVE_SELINUX
 
 ifeq ($(USE_OPENGL_RENDERER),true)
 	LOCAL_SHARED_LIBRARIES += libhwui

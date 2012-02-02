@@ -61,6 +61,29 @@ namespace android {
   }
 
   /*
+   * Function: setSELinuxEnforce
+   * Purpose: set the SE Linux enforcing mode
+   * Parameters: true (enforcing) or false (permissive)
+   * Return value: true (success) or false (fail)
+   * Exceptions: none
+   */
+  static jboolean setSELinuxEnforce(JNIEnv *env, jobject clazz, jboolean value) {
+#ifdef HAVE_SELINUX
+    int enforce = (value) ? 1 : 0;
+    int ret = security_setenforce(enforce);
+    if(ret == -1) {
+      LOGE("Error setting SELinux enforcing mode (%s)", strerror(errno));
+    }
+
+    LOGV("security_setenforce returned %d", ret);
+
+    return (ret != -1) ? true : false;
+#else
+    return false;
+#endif
+  }
+
+  /*
    * Function: getPeerCon
    * Purpose: retrieves security context of peer socket
    * Parameters:
@@ -302,6 +325,99 @@ namespace android {
 #endif
   }
 
+  /*
+   * Function: getBooleanNames
+   * Purpose: Gets a list of the SELinux boolean names.
+   * Parameters: None
+   * Returns: an array of strings  containing the SELinux boolean names.
+   * Exceptions: None
+   */
+  static jobjectArray getBooleanNames(JNIEnv *env, JNIEnv clazz) {
+#ifdef HAVE_SELINUX
+    char **list;
+    int i, len, ret;
+    jclass stringClass;
+    jobjectArray stringArray = NULL;
+
+    if (security_get_boolean_names(&list, &len) == -1) {
+      LOGE("getBooleans: Error retrieving SELinux booleans (%s)", strerror(errno));
+      return NULL;
+    }
+
+    stringClass = env->FindClass("java/lang/String");
+    stringArray = env->NewObjectArray(len, stringClass, env->NewStringUTF(""));
+    for (i = 0; i < len; i++) {
+      jstring obj;
+      obj = env->NewStringUTF(list[i]);
+      env->SetObjectArrayElement(stringArray, i, obj);
+      env->DeleteLocalRef(obj);
+      free(list[i]);
+    }
+    free(list);
+
+    return stringArray;
+#else
+    return NULL;
+#endif
+  }
+
+  /*
+   * Function: getBooleanValue
+   * Purpose: Gets the value for the given SELinux boolean name.
+   * Parameters:
+   *            String: The name of the SELinux boolean.
+   * Returns: a boolean: (true) boolean is set or (false) it is not.
+   * Exceptions: None
+   */
+  static jboolean getBooleanValue(JNIEnv *env, jobject clazz, jstring name) {
+#ifdef HAVE_SELINUX
+    const char *boolean_name;
+    int ret;
+    
+    if (name == NULL)
+      return false;
+    boolean_name = env->GetStringUTFChars(name, NULL);
+    ret = security_get_boolean_active(boolean_name);
+    env->ReleaseStringUTFChars(name, boolean_name);
+    return (ret == 1) ? true : false;
+#else
+    return false;
+#endif
+  }
+
+  /*
+   * Function: setBooleanNames
+   * Purpose: Sets the value for the given SELinux boolean name.
+   * Parameters:
+   *            String: The name of the SELinux boolean.
+   *            Boolean: The new value of the SELinux boolean.
+   * Returns: a boolean indicating whether or not the operation succeeded.
+   * Exceptions: None
+   */
+  static jboolean setBooleanValue(JNIEnv *env, jobject clazz, jstring name, jboolean value) {
+#ifdef HAVE_SELINUX
+    const char *boolean_name = NULL;
+    int ret;
+
+    if (name == NULL)
+      return false;
+    boolean_name = env->GetStringUTFChars(name, NULL);
+    ret = security_set_boolean(boolean_name, (value) ? 1 : 0);
+    env->ReleaseStringUTFChars(name, boolean_name);
+    if (ret) {
+      LOGE("setBooleanValue: Failed to set boolean");
+      return false;
+    }
+    if (security_commit_booleans() == -1) {
+      LOGE("setBooleanValue: Failed to commit");
+      return false;
+    }
+    return true;
+#else
+    return false;
+#endif
+  }
+
   static jboolean checkSELinuxAccess(JNIEnv *env, jobject clazz, jstring scon, jstring tcon, jstring tclass, jstring perm) {
 #ifdef HAVE_SELINUX
     char *myscon = const_cast<char *> (env->GetStringUTFChars(scon, NULL));
@@ -329,6 +445,10 @@ namespace android {
     { "isSELinuxEnabled"         , "()Z"                                          , (void*)isSELinuxEnabled },
     { "setFileContext"           , "(Ljava/lang/String;Ljava/lang/String;)Z"      , (void*)setFileCon       },
     { "setFSCreateContext"       , "(Ljava/lang/String;)Z"                        , (void*)setFSCreateCon   },
+    { "setSELinuxEnforce"        ,  "(Z)Z"                                        , (void*)setSELinuxEnforce  },
+    { "getBooleanNames"          , "()[Ljava/lang/String;"                        , (void*)getBooleanNames },
+    { "getBooleanValue"          , "(Ljava/lang/String;)Z"                        , (void*)getBooleanValue },
+    { "setBooleanValue"          , "(Ljava/lang/String;Z)Z"                       , (void*)setBooleanValue },
   };
 
   static int log_callback(int type, const char *fmt, ...) {

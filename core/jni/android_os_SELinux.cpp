@@ -362,7 +362,7 @@ namespace android {
 
     const char *boolean_name;
     int ret;
-    
+
     if (name == NULL)
       return false;
     boolean_name = env->GetStringUTFChars(name, NULL);

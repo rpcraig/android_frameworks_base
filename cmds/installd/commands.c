@@ -567,7 +567,6 @@ int dexopt(const char *apk_path, uid_t uid, int is_public)
         ALOGE("dexopt cannot chown '%s'\n", dex_path);
         goto fail;
     }
-
     if (fchmod(odex_fd,
                S_IRUSR|S_IWUSR|S_IRGRP |
                (is_public ? S_IROTH : 0)) < 0) {

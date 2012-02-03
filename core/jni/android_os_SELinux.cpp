@@ -11,7 +11,7 @@
 
 namespace android {
 
-  static jboolean isSELinuxDisabled;
+  static jboolean isSELinuxDisabled = true;
 
   static void throw_NullPointerException(JNIEnv *env, const char* msg) {
     jclass clazz;

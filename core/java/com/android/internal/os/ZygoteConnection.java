@@ -113,11 +113,7 @@ class ZygoteConnection {
             throw ex;
         }
 
-        if (SELinux.isSELinuxEnabled()) {
-            peerSecurityContext = SELinux.getPeerContext(mSocket.getFileDescriptor());
-        } else {
-            peerSecurityContext = "";
-        }
+        peerSecurityContext = SELinux.getPeerContext(mSocket.getFileDescriptor());
     }
 
     /**

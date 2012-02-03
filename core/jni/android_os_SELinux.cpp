@@ -10,6 +10,9 @@
 #include <errno.h>
 
 namespace android {
+
+  static jboolean isSELinuxDisabled;
+
   static void throw_NullPointerException(JNIEnv *env, const char* msg) {
     jclass clazz;
     clazz = env->FindClass("java/lang/NullPointerException");
@@ -24,18 +27,8 @@ namespace android {
    * Exceptions: none
    */
   static jboolean isSELinuxEnabled(JNIEnv *env, jobject classz) {
-#ifdef HAVE_SELINUX
-    int seLinuxEnabled = is_selinux_enabled();
-    if(seLinuxEnabled == -1) {
-      LOGE("Error retrieving SELinux enabled status (%s)", strerror(errno));
-    }
 
-    LOGV("is_selinux_enabled returned %d", seLinuxEnabled);
-
-    return (seLinuxEnabled == 1) ? true : false;
-#else
-    return false;
-#endif
+    return !isSELinuxDisabled;
   }
 
   /*
@@ -47,14 +40,7 @@ namespace android {
    */
   static jboolean isSELinuxEnforced(JNIEnv *env, jobject clazz) {
 #ifdef HAVE_SELINUX
-    int seLinuxEnforce = security_getenforce();
-    if(seLinuxEnforce == -1) {
-      LOGE("Error retrieving SELinux enforce mode (%s)", strerror(errno));
-    }
-
-    LOGV("security_getenforce returned %d", seLinuxEnforce);
-
-    return (seLinuxEnforce == 1) ? true : false;
+    return (security_getenforce() == 1) ? true : false;
 #else
     return false;
 #endif
@@ -69,15 +55,12 @@ namespace android {
    */
   static jboolean setSELinuxEnforce(JNIEnv *env, jobject clazz, jboolean value) {
 #ifdef HAVE_SELINUX
+    if (isSELinuxDisabled)
+      return false;
+
     int enforce = (value) ? 1 : 0;
-    int ret = security_setenforce(enforce);
-    if(ret == -1) {
-      LOGE("Error setting SELinux enforcing mode (%s)", strerror(errno));
-    }
 
-    LOGV("security_setenforce returned %d", ret);
-
-    return (ret != -1) ? true : false;
+    return (security_setenforce(enforce) != -1) ? true : false;
 #else
     return false;
 #endif
@@ -93,14 +76,16 @@ namespace android {
    */
   static jstring getPeerCon(JNIEnv *env, jobject clazz, jobject fileDescriptor) {
 #ifdef HAVE_SELINUX
-    if(fileDescriptor == NULL) {
+    if (isSELinuxDisabled)
+      return NULL;
+
+    if (fileDescriptor == NULL) {
       throw_NullPointerException(env, "Trying to check security context of a null peer socket.");
       return NULL;
     }
 
     security_context_t context = NULL;
     jstring securityString = NULL;
-    int peercon_return;
 
     int fd = jniGetFDFromFileDescriptor(env, fileDescriptor);
 
@@ -109,19 +94,15 @@ namespace android {
       goto bail;
     }
 
-    peercon_return = getpeercon(fd, &context);
-
-    if(peercon_return == -1) {
-      LOGE("getPeerCon: Error retrieving context of peer connection (%s)", strerror(errno));
+    if (getpeercon(fd, &context) == -1)
       goto bail;
-    }
 
     LOGV("getPeerCon: Successfully retrived context of peer socket '%s'", context);
 
     securityString = env->NewStringUTF(context);
 
   bail:
-    if(context != NULL)
+    if (context != NULL)
       freecon(context);
 
     return securityString;
@@ -141,27 +122,27 @@ namespace android {
    */
   static jboolean setFSCreateCon(JNIEnv *env, jobject clazz, jstring context) {
 #ifdef HAVE_SELINUX
+    if (isSELinuxDisabled)
+      return false;
+
     char * securityContext = NULL;
     const char *constant_securityContext = NULL;
 
-    if(context != NULL) {
+    if (context != NULL) {
       constant_securityContext = env->GetStringUTFChars(context, NULL);
 
       // GetStringUTFChars returns const char * yet setfscreatecon needs char *
       securityContext = const_cast<char *>(constant_securityContext);
     }
 
-    int ret = setfscreatecon(securityContext);
-    if(ret == -1) {
-      const char * tmp = (context == NULL) ? "default" : securityContext;
-      LOGE("setFSCreateCon: error with setting security context -> '%s' (%s)", tmp, strerror(errno));
+    int ret;
+    if ((ret = setfscreatecon(securityContext)) == -1)
       goto bail;
-    }
 
     LOGV("setFSCreateCon: set new security context to '%s' ", context == NULL ? "default", context);
 
   bail:
-    if(constant_securityContext != NULL)
+    if (constant_securityContext != NULL)
       env->ReleaseStringUTFChars(context, constant_securityContext);
 
     return (ret == 0) ? true : false;
@@ -176,17 +157,20 @@ namespace android {
    * Parameters:
    *       path: the location of the file system object
    *       con: the new security context of the file system object
-   * Returns: 0 on success, -1 on error
+   * Returns: true on success, false on error
    * Exception: NullPointerException is thrown if either path or context strign are NULL
    */
   static jboolean setFileCon(JNIEnv *env, jobject clazz, jstring path, jstring con) {
 #ifdef HAVE_SELINUX
-    if(path == NULL) {
+    if (isSELinuxDisabled)
+      return false;
+
+    if (path == NULL) {
       throw_NullPointerException(env, "Trying to change the security context of a NULL file object.");
       return false;
     }
 
-    if(con == NULL) {
+    if (con == NULL) {
       throw_NullPointerException(env, "Trying to set the security context of a file object with NULL.");
       return false;
     }
@@ -195,13 +179,11 @@ namespace android {
     const char *constant_con = env->GetStringUTFChars(con, NULL);
 
     // GetStringUTFChars returns const char * yet setfilecon needs char *
-    char * newCon = const_cast<char *>(constant_con);
+    char *newCon = const_cast<char *>(constant_con);
 
-    int ret = setfilecon(objectPath, newCon);
-    if(ret == -1) {
-      LOGE("setFileCon: Error setting security context '%s' for '%s' (%s)", newCon, objectPath, strerror(errno));
+    int ret;
+    if ((ret = setfilecon(objectPath, newCon)) == -1)
       goto bail;
-    }
 
     LOGV("setFileCon: Succesfully set security context '%s' for '%s'", newCon, objectPath);
 
@@ -226,7 +208,10 @@ namespace android {
    */
   static jstring getFileCon(JNIEnv *env, jobject clazz, jstring path) {
 #ifdef HAVE_SELINUX
-    if(path == NULL) {
+    if (isSELinuxDisabled)
+      return NULL;
+
+    if (path == NULL) {
       throw_NullPointerException(env, "Trying to check security context of a null path.");
       return NULL;
     }
@@ -236,18 +221,15 @@ namespace android {
     security_context_t context = NULL;
     jstring securityString = NULL;
 
-    int ret = getfilecon(objectPath, &context);
-    if(ret == -1) {
-      LOGE("getFileCon: Error retrieving context of file '%s' (%s)", objectPath, strerror(errno));
+    if (getfilecon(objectPath, &context) == -1)
       goto bail;
-    }
 
     LOGV("getFileCon: Successfully retrived context '%s' for file '%s'", context, objectPath);
 
     securityString = env->NewStringUTF(context);
 
   bail:
-    if(context != NULL)
+    if (context != NULL)
       freecon(context);
 
     env->ReleaseStringUTFChars(path, objectPath);
@@ -268,20 +250,21 @@ namespace android {
    */
   static jstring getCon(JNIEnv *env, jobject clazz) {
 #ifdef HAVE_SELINUX
+    if (isSELinuxDisabled)
+      return NULL;
+
     security_context_t context = NULL;
     jstring securityString = NULL;
 
-    if(getcon(&context) == -1) {
-      LOGE("getCon: Error retrieving own context: (%s)", strerror(errno));
+    if (getcon(&context) == -1)
       goto bail;
-    }
 
     LOGV("getCon: Successfully retrieved context '%s'", context);
 
     securityString = env->NewStringUTF(context);
 
   bail:
-    if(context != NULL)
+    if (context != NULL)
       freecon(context);
 
     return securityString;
@@ -301,22 +284,23 @@ namespace android {
    */
   static jstring getPidCon(JNIEnv *env, jobject clazz, jint pid) {
 #ifdef HAVE_SELINUX
+    if (isSELinuxDisabled)
+      return NULL;
+
     security_context_t context = NULL;
     jstring securityString = NULL;
 
     pid_t checkPid = (pid_t)pid;
 
-    if(getpidcon(checkPid, &context) == -1) {
-      LOGE("getPidCon: Error retrieving context of pid '%d' (%s)", checkPid, strerror(errno));
+    if (getpidcon(checkPid, &context) == -1)
       goto bail;
-    }
 
     LOGV("getPidCon: Successfully retrived context '%s' for pid '%d'", context, checkPid);
 
     securityString = env->NewStringUTF(context);
 
   bail:
-    if(context != NULL)
+    if (context != NULL)
       freecon(context);
 
     return securityString;
@@ -330,19 +314,21 @@ namespace android {
    * Purpose: Gets a list of the SELinux boolean names.
    * Parameters: None
    * Returns: an array of strings  containing the SELinux boolean names.
+   *          returns NULL string on error
    * Exceptions: None
    */
   static jobjectArray getBooleanNames(JNIEnv *env, JNIEnv clazz) {
 #ifdef HAVE_SELINUX
+    if (isSELinuxDisabled)
+      return NULL;
+
     char **list;
     int i, len, ret;
     jclass stringClass;
     jobjectArray stringArray = NULL;
 
-    if (security_get_boolean_names(&list, &len) == -1) {
-      LOGE("getBooleans: Error retrieving SELinux booleans (%s)", strerror(errno));
+    if (security_get_boolean_names(&list, &len) == -1)
       return NULL;
-    }
 
     stringClass = env->FindClass("java/lang/String");
     stringArray = env->NewObjectArray(len, stringClass, env->NewStringUTF(""));
@@ -371,6 +357,9 @@ namespace android {
    */
   static jboolean getBooleanValue(JNIEnv *env, jobject clazz, jstring name) {
 #ifdef HAVE_SELINUX
+    if (isSELinuxDisabled)
+      return false;
+
     const char *boolean_name;
     int ret;
     
@@ -396,6 +385,9 @@ namespace android {
    */
   static jboolean setBooleanValue(JNIEnv *env, jobject clazz, jstring name, jboolean value) {
 #ifdef HAVE_SELINUX
+    if (isSELinuxDisabled)
+      return false;
+
     const char *boolean_name = NULL;
     int ret;
 
@@ -404,27 +396,62 @@ namespace android {
     boolean_name = env->GetStringUTFChars(name, NULL);
     ret = security_set_boolean(boolean_name, (value) ? 1 : 0);
     env->ReleaseStringUTFChars(name, boolean_name);
-    if (ret) {
-      LOGE("setBooleanValue: Failed to set boolean");
+    if (ret)
       return false;
-    }
-    if (security_commit_booleans() == -1) {
-      LOGE("setBooleanValue: Failed to commit");
+
+    if (security_commit_booleans() == -1)
       return false;
-    }
+
     return true;
 #else
     return false;
 #endif
   }
 
+  /*
+   * Function: checkSELinuxAccess
+   * Purpose: Check permissions between two security contexts.
+   * Parameters: scon: subject security context as a string
+   *             tcon: object security context as a string
+   *             tclass: object's security class name as a string
+   *             perm: permission name as a string
+   * Returns: boolean: (true) if permission was granted, (false) otherwise
+   * Exceptions: None
+   */
   static jboolean checkSELinuxAccess(JNIEnv *env, jobject clazz, jstring scon, jstring tcon, jstring tclass, jstring perm) {
 #ifdef HAVE_SELINUX
-    char *myscon = const_cast<char *> (env->GetStringUTFChars(scon, NULL));
-    char *mytcon = const_cast<char *> (env->GetStringUTFChars(tcon, NULL));
-    const char *mytclass = env->GetStringUTFChars(tclass, NULL);
-    const char *myperm = env->GetStringUTFChars(perm, NULL);
-    return (selinux_check_access(myscon, mytcon, mytclass, myperm, NULL) == 0) ? true : false;
+    if (isSELinuxDisabled)
+      return true;
+
+    int accessGranted = -1;
+
+    const char *const_scon, *const_tcon, *mytclass, *myperm;
+    char *myscon, *mytcon;
+
+    if (scon == NULL || tcon == NULL || tclass == NULL || perm == NULL)
+      goto bail;
+
+    const_scon = env->GetStringUTFChars(scon, NULL);
+    const_tcon = env->GetStringUTFChars(tcon, NULL);
+    mytclass   = env->GetStringUTFChars(tclass, NULL);
+    myperm     = env->GetStringUTFChars(perm, NULL);
+
+    // selinux_check_access needs char* for some
+    myscon = const_cast<char *>(const_scon);
+    mytcon = const_cast<char *>(const_tcon);
+
+    accessGranted = selinux_check_access(myscon, mytcon, mytclass, myperm, NULL);
+
+    LOGV("selinux_check_access returned %d", accessGranted);
+
+    env->ReleaseStringUTFChars(scon, const_scon);
+    env->ReleaseStringUTFChars(tcon, const_tcon);
+    env->ReleaseStringUTFChars(tclass, mytclass);
+    env->ReleaseStringUTFChars(perm, myperm);
+
+  bail:
+    return (accessGranted == 0) ? true : false;
+
 #else
     return true;
 #endif
@@ -437,18 +464,18 @@ namespace android {
 
     /* name,                     signature,                    funcPtr */
     { "checkSELinuxAccess"       , "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z" , (void*)checkSELinuxAccess },
+    { "getBooleanNames"          , "()[Ljava/lang/String;"                        , (void*)getBooleanNames  },
+    { "getBooleanValue"          , "(Ljava/lang/String;)Z"                        , (void*)getBooleanValue  },
     { "getContext"               , "()Ljava/lang/String;"                         , (void*)getCon           },
     { "getFileContext"           , "(Ljava/lang/String;)Ljava/lang/String;"       , (void*)getFileCon       },
     { "getPeerContext"           , "(Ljava/io/FileDescriptor;)Ljava/lang/String;" , (void*)getPeerCon       },
     { "getPidContext"            , "(I)Ljava/lang/String;"                        , (void*)getPidCon        },
     { "isSELinuxEnforced"        , "()Z"                                          , (void*)isSELinuxEnforced},
     { "isSELinuxEnabled"         , "()Z"                                          , (void*)isSELinuxEnabled },
+    { "setBooleanValue"          , "(Ljava/lang/String;Z)Z"                       , (void*)setBooleanValue  },
     { "setFileContext"           , "(Ljava/lang/String;Ljava/lang/String;)Z"      , (void*)setFileCon       },
     { "setFSCreateContext"       , "(Ljava/lang/String;)Z"                        , (void*)setFSCreateCon   },
-    { "setSELinuxEnforce"        ,  "(Z)Z"                                        , (void*)setSELinuxEnforce  },
-    { "getBooleanNames"          , "()[Ljava/lang/String;"                        , (void*)getBooleanNames },
-    { "getBooleanValue"          , "(Ljava/lang/String;)Z"                        , (void*)getBooleanValue },
-    { "setBooleanValue"          , "(Ljava/lang/String;Z)Z"                       , (void*)setBooleanValue },
+    { "setSELinuxEnforce"        , "(Z)Z"                                         , (void*)setSELinuxEnforce},
   };
 
   static int log_callback(int type, const char *fmt, ...) {
@@ -464,6 +491,9 @@ namespace android {
     union selinux_callback cb;
     cb.func_log = log_callback;
     selinux_set_callback(SELINUX_CB_LOG, cb);
+
+    isSELinuxDisabled = (is_selinux_enabled() != 1) ? true : false;
+
 #endif
     return AndroidRuntime::registerNativeMethods(
          env, "android/os/SELinux",

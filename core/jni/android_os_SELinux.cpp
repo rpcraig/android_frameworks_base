@@ -6,6 +6,7 @@
 #include "android_runtime/AndroidRuntime.h"
 #ifdef HAVE_SELINUX
 #include "selinux/selinux.h"
+#include "selinux/android.h"
 #endif
 #include <errno.h>
 
@@ -458,6 +459,33 @@ namespace android {
   }
 
   /*
+   * Function: restorecon
+   * Purpose: restore default SELinux security context
+   * Parameters: pathname: the pathname for the file to be relabeled
+   * Returns: boolean: (true) file label succesfully restored, (false) otherwise
+   * Exceptions: None
+   */
+  static jboolean restorecon(JNIEnv *env, jobject clazz, jstring pathname) {
+#ifdef HAVE_SELINUX
+    if (isSELinuxDisabled)
+      return true;
+
+    if (pathname == NULL)
+      return false;
+
+    const char *file = const_cast<char *>(env->GetStringUTFChars(pathname, NULL));
+
+    int ret = selinux_android_restorecon(file);
+
+    env->ReleaseStringUTFChars(pathname, file);
+
+    return ret == 0 ? true : false;
+#else
+    return true;
+#endif
+  }
+
+  /*
    * JNI registration.
    */
   static JNINativeMethod method_table[] = {
@@ -472,6 +500,7 @@ namespace android {
     { "getPidContext"            , "(I)Ljava/lang/String;"                        , (void*)getPidCon        },
     { "isSELinuxEnforced"        , "()Z"                                          , (void*)isSELinuxEnforced},
     { "isSELinuxEnabled"         , "()Z"                                          , (void*)isSELinuxEnabled },
+    { "restorecon"               , "(Ljava/lang/String;)Z"                        , (void*)restorecon       },
     { "setBooleanValue"          , "(Ljava/lang/String;Z)Z"                       , (void*)setBooleanValue  },
     { "setFileContext"           , "(Ljava/lang/String;Ljava/lang/String;)Z"      , (void*)setFileCon       },
     { "setFSCreateContext"       , "(Ljava/lang/String;)Z"                        , (void*)setFSCreateCon   },

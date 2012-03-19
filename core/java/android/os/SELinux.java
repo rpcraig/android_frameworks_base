@@ -102,4 +102,11 @@ public class SELinux {
      * @return a boolean indicating whether permission was granted.
      */
     public static final native boolean checkSELinuxAccess(String scon, String tcon, String tclass, String perm);
+
+    /**
+     * Restores a file to its default SELinux security context.
+     * @param pathname The pathname of the file to be relabeled.
+     * @return a boolean indicating whether the relabeling succeeded.
+     */
+    public static final native boolean restorecon(String pathname);
 }

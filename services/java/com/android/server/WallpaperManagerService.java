@@ -41,6 +41,7 @@ import android.os.RemoteException;
 import android.os.FileObserver;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteCallbackList;
+import android.os.SELinux;
 import android.os.ServiceManager;
 import android.os.SystemClock;
 import android.service.wallpaper.IWallpaperConnection;
@@ -485,6 +486,7 @@ class WallpaperManagerService extends IWallpaperManager.Stub {
             }
             ParcelFileDescriptor fd = ParcelFileDescriptor.open(WALLPAPER_FILE,
                     MODE_CREATE|MODE_READ_WRITE);
+            SELinux.restorecon(WALLPAPER_FILE.getPath());
             mName = name;
             return fd;
         } catch (FileNotFoundException e) {

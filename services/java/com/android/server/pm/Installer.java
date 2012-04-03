@@ -367,9 +367,4 @@ class Installer {
 
         return execute(builder.toString());
     }
-
-    public int reloadSEPolicy() {
-        return execute("reloadseapp");
-    }
-
 }

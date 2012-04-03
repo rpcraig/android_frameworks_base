@@ -16,9 +16,6 @@
 
 #include "installd.h"
 
-#ifdef HAVE_SELINUX
-#include <selinux/android.h>
-#endif
 
 #define BUFFER_MAX    1024  /* input buffer for commands */
 #define TOKEN_MAX     8     /* max number of arguments in buffer */
@@ -125,15 +122,6 @@ static int do_unlinklib(char **arg, char reply[REPLY_MAX])
     return unlinklib(arg[0]);
 }
 
-static int do_reload_seapp(char **arg, char reply[REPLY_MAX])
-{
-    int ret = 0;
-#ifdef HAVE_SELINUX
-    ret = selinux_android_seapp_context_reload();
-#endif
-    return ret;
-}
-
 struct cmdinfo {
     const char *name;
     unsigned numargs;
@@ -158,7 +146,6 @@ struct cmdinfo cmds[] = {
     { "unlinklib",            1, do_unlinklib },
     { "mkuserdata",           3, do_mk_user_data },
     { "rmuser",               1, do_rm_user },
-    { "reloadseapp",          0, do_reload_seapp },
 };
 
 static int readx(int s, void *_buf, int count)

@@ -42,6 +42,16 @@ ifeq ($(USE_OPENGL_RENDERER),true)
 	LOCAL_CFLAGS += -fvisibility=hidden
 	LOCAL_MODULE_CLASS := SHARED_LIBRARIES
 	LOCAL_SHARED_LIBRARIES := libcutils libutils libGLESv2 libskia libui
+
+ifeq ($(BOARD_USES_QCOM_HARDWARE),true)
+LOCAL_CFLAGS += -DQCOM_HARDWARE
+
+ifeq ($(TARGET_BOARD_PLATFORM),qsd8k)
+LOCAL_CFLAGS += -DTARGET8x50
+endif
+
+endif # QCOM_HARDWARE
+
 	LOCAL_MODULE := libhwui
 	LOCAL_MODULE_TAGS := optional
 	

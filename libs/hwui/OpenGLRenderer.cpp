@@ -144,6 +144,13 @@ void OpenGLRenderer::setViewport(int width, int height) {
     mDirtyClip = false;
 }
 
+#ifdef QCOM_HARDWARE
+void OpenGLRenderer::getViewport(int &width, int &height) {
+    width = mWidth;
+    height = mHeight;
+}
+#endif
+
 void OpenGLRenderer::prepare(bool opaque) {
     prepareDirty(0.0f, 0.0f, mWidth, mHeight, opaque);
 }
@@ -163,10 +170,15 @@ void OpenGLRenderer::prepareDirty(float left, float top, float right, float bott
     glScissor(left, mSnapshot->height - bottom, right - left, bottom - top);
     mSnapshot->setClip(left, top, right, bottom);
 
+#if defined(QCOM_HARDWARE) && !defined(TARGET8x50)
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+#else
     if (!opaque) {
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT);
     }
+#endif
 }
 
 void OpenGLRenderer::finish() {

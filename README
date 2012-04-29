@@ -1,0 +1,6 @@
+git remote add evervolv git://github.com/Evervolv/android_frameworks_base.git
+git pull evervolv
+git branch --set-upstream evervolv-ics local/evervolv-ics
+git checkout evervolv-ics
+git merge evervolv/ics
+git push git@github.com:rpcraig/android_frameworks_base.git evervolv-ics

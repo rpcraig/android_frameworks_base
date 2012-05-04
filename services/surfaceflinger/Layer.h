@@ -71,9 +71,15 @@ public:
     virtual bool needsDithering() const     { return mNeedsDithering; }
     virtual bool isSecure() const           { return mSecure; }
     virtual bool isProtected() const;
+#ifdef QCOM_HARDWARE
+    virtual void setIsUpdating(bool isUpdating);
+#endif
     virtual void onRemoved();
     virtual sp<Layer> getLayer() const { return const_cast<Layer*>(this); }
     virtual void setName(const String8& name);
+#ifdef QCOM_HARDWARE
+    virtual bool isRotated() const;
+#endif
 
     // LayerBaseClient interface
     virtual wp<IBinder> getSurfaceTextureBinder() const;
@@ -124,6 +130,11 @@ private:
 
     // binder thread, transaction thread
     mutable Mutex mLock;
+
+#ifdef QCOM_HARDWARE
+    // Qcom specific flags for this layer.
+    int mLayerQcomFlags;
+#endif
 };
 
 // ---------------------------------------------------------------------------

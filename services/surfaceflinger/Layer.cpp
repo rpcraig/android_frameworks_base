@@ -39,6 +39,10 @@
 #include "SurfaceFlinger.h"
 #include "SurfaceTextureLayer.h"
 
+#ifdef QCOM_HARDWARE
+#include <qcom_ui.h>
+#endif
+
 #define DEBUG_RESIZE    0
 
 
@@ -59,10 +63,16 @@ Layer::Layer(SurfaceFlinger* flinger,
         mOpaqueLayer(true),
         mNeedsDithering(false),
         mSecure(false),
+#ifdef QCOM_HARDWARE
+        mLayerQcomFlags(0),
+#endif
         mProtectedByApp(false)
 {
     mCurrentCrop.makeInvalid();
     glGenTextures(1, &mTextureName);
+#ifdef QCOM_HARDWARE
+    updateLayerQcomFlags(LAYER_UPDATE_STATUS, true, mLayerQcomFlags);
+#endif
 }
 
 void Layer::onFirstRef()
@@ -83,7 +93,11 @@ void Layer::onFirstRef()
     mSurfaceTexture = new SurfaceTextureLayer(mTextureName, this);
     mSurfaceTexture->setFrameAvailableListener(new FrameQueuedListener(this));
     mSurfaceTexture->setSynchronousMode(true);
+#ifdef QCOM_HARDWARE
+    mSurfaceTexture->setBufferCountServer(BUFFER_COUNT_SERVER);
+#else
     mSurfaceTexture->setBufferCountServer(2);
+#endif
 }
 
 Layer::~Layer()
@@ -176,17 +190,43 @@ status_t Layer::setBuffers( uint32_t w, uint32_t h,
     return NO_ERROR;
 }
 
+#ifdef QCOM_HARDWARE
+bool Layer::isRotated() const {
+
+    const Layer::State& front(drawingState());
+
+    if( (front.w == front.requested_w) &&
+        (front.h == front.requested_h) ) {
+        return true;
+    }
+    return false;
+}
+#endif
+
 void Layer::setGeometry(hwc_layer_t* hwcl)
 {
     LayerBaseClient::setGeometry(hwcl);
 
     hwcl->flags &= ~HWC_SKIP_LAYER;
 
+#ifdef QCOM_HARDWARE
+    const DisplayHardware& hw(graphicPlane(0).displayHardware());
+    // we can't do alpha-fade with the hwc HAL. C2D composition
+    // can handle fade cases
+    const State& s(drawingState());
+    if ((s.alpha < 0xFF) &&
+        !(DisplayHardware::C2D_COMPOSITION & hw.getFlags())) {
+        hwcl->flags = HWC_SKIP_LAYER;
+    }
+
+    hwcl->alpha = s.alpha;
+#else
     // we can't do alpha-fade with the hwc HAL
     const State& s(drawingState());
     if (s.alpha < 0xFF) {
         hwcl->flags = HWC_SKIP_LAYER;
     }
+#endif
 
     /*
      * Transformations are applied in this order:
@@ -240,6 +280,12 @@ void Layer::setPerFrameData(hwc_layer_t* hwcl) {
     } else {
         hwcl->handle = buffer->handle;
     }
+#ifdef QCOM_HARDWARE
+#ifndef TARGET8x50
+    updateLayerQcomFlags(LAYER_ASYNCHRONOUS_STATUS, !mSurfaceTexture->isSynchronousMode(), mLayerQcomFlags);
+#endif
+    hwcl->flags = getPerFrameFlags(hwcl->flags, mLayerQcomFlags);
+#endif
 }
 
 void Layer::onDraw(const Region& clip) const
@@ -272,30 +318,60 @@ void Layer::onDraw(const Region& clip) const
         return;
     }
 
+#ifdef QCOM_HARDWARE
+	if (!isGPUSupportedFormat(mActiveBuffer->format)) {
+	    clearWithOpenGL(clip, 0, 0, 0, 1);
+        return;
+	}
+#endif
+
+    GLuint currentTextureTarget =
+#ifdef QCOM_HARDWARE
+            mSurfaceTexture->getCurrentTextureTarget();
+#else
+            GL_TEXTURE_EXTERNAL_OES;
+#endif
+
     if (!isProtected()) {
-        glBindTexture(GL_TEXTURE_EXTERNAL_OES, mTextureName);
+        glBindTexture(currentTextureTarget, mTextureName);
         GLenum filter = GL_NEAREST;
         if (getFiltering() || needsFiltering() || isFixedSize() || isCropped()) {
             // TODO: we could be more subtle with isFixedSize()
             filter = GL_LINEAR;
         }
-        glTexParameterx(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, filter);
-        glTexParameterx(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, filter);
+        glTexParameterx(currentTextureTarget, GL_TEXTURE_MAG_FILTER, filter);
+        glTexParameterx(currentTextureTarget, GL_TEXTURE_MIN_FILTER, filter);
         glMatrixMode(GL_TEXTURE);
         glLoadMatrixf(mTextureMatrix);
         glMatrixMode(GL_MODELVIEW);
         glDisable(GL_TEXTURE_2D);
-        glEnable(GL_TEXTURE_EXTERNAL_OES);
+        glEnable(currentTextureTarget);
     } else {
+#ifdef QCOM_HARDWARE
+        glBindTexture(currentTextureTarget, mFlinger->getProtectedTexName());
+#else
         glBindTexture(GL_TEXTURE_2D, mFlinger->getProtectedTexName());
+#endif
         glMatrixMode(GL_TEXTURE);
         glLoadIdentity();
         glMatrixMode(GL_MODELVIEW);
-        glDisable(GL_TEXTURE_EXTERNAL_OES);
+#ifdef QCOM_HARDWARE
+        glEnable(currentTextureTarget);
+#else
+        glDisable(currentTextureTarget);
         glEnable(GL_TEXTURE_2D);
+#endif
     }
 
+#ifdef QCOM_HARDWARE
+    int composeS3DFormat = mQCLayer->needsS3DCompose();
+    if (composeS3DFormat)
+        drawS3DUIWithOpenGL(clip);
+    else
+        drawWithOpenGL(clip);
+#else
     drawWithOpenGL(clip);
+#endif
 
     glDisable(GL_TEXTURE_EXTERNAL_OES);
     glDisable(GL_TEXTURE_2D);
@@ -339,6 +415,13 @@ bool Layer::isProtected() const
     return (activeBuffer != 0) &&
             (activeBuffer->getUsage() & GRALLOC_USAGE_PROTECTED);
 }
+
+#ifdef QCOM_HARDWARE
+void Layer::setIsUpdating(bool isUpdating)
+{
+    updateLayerQcomFlags(LAYER_UPDATE_STATUS, isUpdating, mLayerQcomFlags);
+}
+#endif
 
 uint32_t Layer::doTransaction(uint32_t flags)
 {
@@ -400,12 +483,24 @@ void Layer::lockPageFlip(bool& recomputeVisibleRegions)
             mFlinger->signalEvent();
         }
 
+#ifdef QCOM_HARDWARE
+        // While calling updateTexImage() from SurfaceFlinger, let it know
+        // by passing an extra parameter
+        // This will be true always.
+
+        bool isComposition = true;
+
+        if (mSurfaceTexture->updateTexImage(isComposition) < NO_ERROR) {
+#else
         if (mSurfaceTexture->updateTexImage() < NO_ERROR) {
+#endif
             // something happened!
             recomputeVisibleRegions = true;
             return;
         }
-
+#ifdef QCOM_HARDWARE
+        updateLayerQcomFlags(LAYER_UPDATE_STATUS, true, mLayerQcomFlags);
+#endif
         // update the active buffer
         mActiveBuffer = mSurfaceTexture->getCurrentBuffer();
 
@@ -493,6 +588,10 @@ void Layer::lockPageFlip(bool& recomputeVisibleRegions)
                     bufWidth, bufHeight, mCurrentTransform,
                     front.requested_w, front.requested_h);
         }
+#ifdef QCOM_HARDWARE
+    } else {
+        updateLayerQcomFlags(LAYER_UPDATE_STATUS, false, mLayerQcomFlags);
+#endif
     }
 }
 
@@ -550,7 +649,12 @@ uint32_t Layer::getEffectiveUsage(uint32_t usage) const
         // need a hardware-protected path to external video sink
         usage |= GraphicBuffer::USAGE_PROTECTED;
     }
+#ifdef MISSING_GRALLOC_BUFFERS
+    usage |= GraphicBuffer::USAGE_HW_TEXTURE;
+#else
     usage |= GraphicBuffer::USAGE_HW_COMPOSER;
+#endif
+
     return usage;
 }
 

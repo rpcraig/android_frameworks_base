@@ -37,6 +37,9 @@
 
 #include "DisplayHardware/DisplayHardware.h"
 #include "Transform.h"
+#ifdef QCOM_HARDWARE
+#include "qcom_ui.h"
+#endif
 
 namespace android {
 
@@ -114,6 +117,9 @@ public:
     virtual void setPerFrameData(hwc_layer_t* hwcl);
             void setOverlay(bool inOverlay);
             bool isOverlay() const;
+#ifdef QCOM_HARDWARE
+    virtual bool isRotated() const;
+#endif
 
 
     /**
@@ -205,7 +211,12 @@ public:
     /** called with the state lock when the surface is removed from the
      *  current list */
     virtual void onRemoved() { };
-    
+
+#ifdef QCOM_HARDWARE
+    /** Called from surfaceFlinger to update the layer */
+    virtual void setIsUpdating(bool isUpdating) { };
+#endif
+
     /** always call base class first */
     virtual void dump(String8& result, char* scratch, size_t size) const;
     virtual void shortDump(String8& result, char* scratch, size_t size) const;
@@ -222,6 +233,9 @@ public:
 
     int32_t  getOrientation() const { return mOrientation; }
     int32_t  getPlaneOrientation() const { return mPlaneOrientation; }
+#ifdef QCOM_HARDWARE
+    QCBaseLayer * mQCLayer;
+#endif
     
 protected:
     const GraphicPlane& graphicPlane(int dpy) const;
@@ -231,6 +245,9 @@ protected:
                                GLclampf b, GLclampf alpha) const;
           void clearWithOpenGL(const Region& clip) const;
           void drawWithOpenGL(const Region& clip) const;
+#ifdef QCOM_HARDWARE
+          void drawS3DUIWithOpenGL(const Region& clip) const;
+#endif
 
           void setFiltering(bool filtering);
           bool getFiltering() const;

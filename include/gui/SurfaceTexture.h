@@ -75,8 +75,7 @@ public:
     // fences should be used to synchronize access to buffers if that behavior
     // is enabled at compile-time.
     SurfaceTexture(GLuint tex, bool allowSynchronousMode = true,
-            GLenum texTarget = GL_TEXTURE_EXTERNAL_OES, bool useFenceSync = true,
-            const sp<BufferQueue> &bufferQueue = 0);
+            GLenum texTarget = GL_TEXTURE_EXTERNAL_OES, bool useFenceSync = true);
 
     virtual ~SurfaceTexture();
 
@@ -113,6 +112,10 @@ public:
 
     virtual int query(int what, int* value);
 
+#ifdef QCOM_HARDWARE
+    virtual int performQcomOperation(int operation, int arg1, int arg2, int arg3);
+#endif
+
     // setSynchronousMode set whether dequeueBuffer is synchronous or
     // asynchronous. In synchronous mode, dequeueBuffer blocks until
     // a buffer is available, the currently bound buffer can be dequeued and
@@ -144,7 +147,11 @@ public:
     //
     // This call may only be made while the OpenGL ES context to which the
     // target texture belongs is bound to the calling thread.
+#ifdef QCOM_HARDWARE
+    status_t updateTexImage(bool isComposition  = false);
+#else
     status_t updateTexImage();
+#endif
 
     // setBufferCountServer set the buffer count. If the client has requested
     // a buffer count using setBufferCount, the server-buffer count will
@@ -509,12 +516,28 @@ private:
     // glCopyTexSubImage to read from the texture.  This is a hack to work
     // around a GL driver limitation on the number of FBO attachments, which the
     // browser's tile cache exceeds.
+#ifdef QCOM_HARDWARE
+    GLenum mTexTarget;
+#else
     const GLenum mTexTarget;
+#endif
 
     // mFrameCounter is the free running counter, incremented for every buffer queued
     // with the surface Texture.
     uint64_t mFrameCounter;
 
+#ifdef QCOM_HARDWARE
+    // s3dFormat is the S3D format specified by the client.
+    int mS3DFormat;
+
+    struct BufferInfo {
+         int width;
+         int height;
+         int format;
+     };
+
+     BufferInfo mNextBufferInfo;
+#endif
 
 };
 

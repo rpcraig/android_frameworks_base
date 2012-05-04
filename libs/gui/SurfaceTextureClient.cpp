@@ -23,6 +23,10 @@
 
 #include <utils/Log.h>
 
+#ifdef QCOM_HARDWARE
+#include <qcom_ui.h>
+#endif
+
 namespace android {
 
 SurfaceTextureClient::SurfaceTextureClient(
@@ -59,6 +63,9 @@ void SurfaceTextureClient::init() {
     mReqHeight = 0;
     mReqFormat = 0;
     mReqUsage = 0;
+#ifdef QCOM_HARDWARE
+    mReqExtUsage = 0;
+#endif
     mTimestamp = NATIVE_WINDOW_TIMESTAMP_AUTO;
     mDefaultWidth = 0;
     mDefaultHeight = 0;
@@ -322,11 +329,34 @@ int SurfaceTextureClient::perform(int operation, va_list args)
         res = dispatchDisconnect(args);
         break;
     default:
-        res = NAME_NOT_FOUND;
+#ifdef QCOM_HARDWARE
+        res = dispatchPerformQcomOperation(operation, args);
+#else
+	res = NAME_NOT_FOUND;
+#endif
         break;
     }
     return res;
 }
+
+#ifdef QCOM_HARDWARE
+int SurfaceTextureClient::dispatchPerformQcomOperation(int operation,
+                                                       va_list args) {
+    int num_args = getNumberOfArgsForOperation(operation);
+    if (-EINVAL == num_args) {
+        ALOGE("%s: invalid arguments for operation (operation = 0x%x)",
+             __FUNCTION__, operation);
+        return -1;
+    }
+
+    ALOGV("%s: num_args = %d", __FUNCTION__, num_args);
+    int arg[3] = {0, 0, 0};
+    for (int i =0; i < num_args; i++) {
+        arg[i] = va_arg(args, int);
+    }
+    return performQcomOperation(operation, arg[0], arg[1], arg[2]);
+}
+#endif
 
 int SurfaceTextureClient::dispatchConnect(va_list args) {
     int api = va_arg(args, int);
@@ -400,6 +430,15 @@ int SurfaceTextureClient::dispatchUnlockAndPost(va_list args) {
     return unlockAndPost();
 }
 
+#ifdef QCOM_HARDWARE
+int SurfaceTextureClient::performQcomOperation(int operation, int arg1,
+                                               int arg2, int arg3) {
+    ALOGV("SurfaceTextureClient::performQcomOperation");
+    Mutex::Autolock lock(mMutex);
+    int err = mSurfaceTexture->performQcomOperation(operation, arg1, arg2, arg3);
+    return err;
+}
+#endif
 
 int SurfaceTextureClient::connect(int api) {
     ALOGV("SurfaceTextureClient::connect");
@@ -433,7 +472,25 @@ int SurfaceTextureClient::setUsage(uint32_t reqUsage)
 {
     ALOGV("SurfaceTextureClient::setUsage");
     Mutex::Autolock lock(mMutex);
+#ifdef QCOM_HARDWARE
+    if (reqUsage & GRALLOC_USAGE_EXTERNAL_ONLY) {
+        //Set explicitly, since reqUsage may have other values.
+        mReqExtUsage = GRALLOC_USAGE_EXTERNAL_ONLY;
+        //This flag is never independent. Always an add-on to
+        //GRALLOC_USAGE_EXTERNAL_ONLY
+        if(reqUsage & GRALLOC_USAGE_EXTERNAL_BLOCK) {
+            mReqExtUsage |= GRALLOC_USAGE_EXTERNAL_BLOCK;
+        }
+    }
+    // For most cases mReqExtUsage will be 0.
+    // reqUsage could come from app or driver. When it comes from app
+    // and subsequently from driver, the latter ends up overwriting
+    // the existing values. We cache certain values in mReqExtUsage
+    // to avoid being overwritten.
+    mReqUsage = reqUsage | mReqExtUsage;
+#else
     mReqUsage = reqUsage;
+#endif
     return OK;
 }
 
@@ -637,20 +694,47 @@ status_t SurfaceTextureClient::lock(
                     backBuffer->height == frontBuffer->height &&
                     backBuffer->format == frontBuffer->format);
 
+#ifdef QCOM_HARDWARE
+            int bufferCount;
+
+            //mSurfaceTexture->query(NATIVE_WINDOW_NUM_BUFFERS, &bufferCount);
+	    mSurfaceTexture->query(9, &bufferCount);
+            const int backBufferidx = getSlotFromBufferLocked(out);
+#endif
+
             if (canCopyBack) {
                 // copy the area that is invalid and not repainted this round
+#ifdef QCOM_HARDWARE
+                Region oldDirtyRegion;
+                for(int i = 0 ; i < bufferCount; i++ ) {
+                    if(i != backBufferidx  && !mOldDirtyRegion[i].isEmpty())
+                        oldDirtyRegion.orSelf(mOldDirtyRegion[i]);
+                }
+
+                const Region copyback(oldDirtyRegion.subtract(newDirtyRegion));
+#else
                 const Region copyback(mOldDirtyRegion.subtract(newDirtyRegion));
+#endif
                 if (!copyback.isEmpty())
                     copyBlt(backBuffer, frontBuffer, copyback);
             } else {
                 // if we can't copy-back anything, modify the user's dirty
                 // region to make sure they redraw the whole buffer
                 newDirtyRegion.set(bounds);
+#ifdef QCOM_HARDWARE
+                for(int i = 0 ; i < bufferCount; i++ ) {
+                     mOldDirtyRegion[i].clear();
+                }
+#endif
             }
 
             // keep track of the are of the buffer that is "clean"
             // (ie: that will be redrawn)
+#ifdef QCOM_HARDWARE
+            mOldDirtyRegion[backBufferidx] = newDirtyRegion;
+#else
             mOldDirtyRegion = newDirtyRegion;
+#endif
 
             if (inOutDirtyBounds) {
                 *inOutDirtyBounds = newDirtyRegion.getBounds();

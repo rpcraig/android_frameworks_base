@@ -50,6 +50,33 @@ LOCAL_C_INCLUDES := \
 
 LOCAL_C_INCLUDES += hardware/libhardware/modules/gralloc
 
+ifeq ($(BOARD_USES_QCOM_HARDWARE),true)
+
+ifneq ($(BOARD_USES_LEGACY_QCOM),true)
+
+ifeq ($(TARGET_HAVE_BYPASS),true)
+    LOCAL_CFLAGS += -DBUFFER_COUNT_SERVER=3
+else
+    LOCAL_CFLAGS += -DBUFFER_COUNT_SERVER=2
+endif
+
+LOCAL_SHARED_LIBRARIES += \
+	libQcomUI
+LOCAL_C_INCLUDES += hardware/qcom/display/libqcomui
+LOCAL_CFLAGS += -DQCOM_HARDWARE
+
+ifeq ($(TARGET_BOARD_PLATFORM),qsd8k)
+LOCAL_CFLAGS += -DTARGET8x50
+endif
+
+endif # LEGACY_QCOM
+
+ifeq ($(TARGET_QCOM_HDMI_OUT),true)
+LOCAL_CFLAGS += -DQCOM_HDMI_OUT
+endif
+
+endif # QCOM_HARDWARE
+
 LOCAL_MODULE:= libsurfaceflinger
 
 include $(BUILD_SHARED_LIBRARY)

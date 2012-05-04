@@ -97,6 +97,16 @@ public:
     virtual ~GraphicBufferAlloc();
     virtual sp<GraphicBuffer> createGraphicBuffer(uint32_t w, uint32_t h,
         PixelFormat format, uint32_t usage, status_t* error);
+#ifdef QCOM_HARDWARE
+    virtual void freeAllGraphicBuffersExcept(int bufIdx);
+    virtual void freeGraphicBufferAtIndex(int bufIdx);
+    virtual void setGraphicBufferSize(int size);
+private:
+    Vector<sp<GraphicBuffer> > mBuffers;
+    Mutex mLock;
+    int mFreedIndex;
+    int mSize;
+#endif
 };
 
 // ---------------------------------------------------------------------------
@@ -171,6 +181,13 @@ public:
                                                             int orientation, uint32_t flags);
     virtual int                         setOrientation(DisplayID dpy, int orientation, uint32_t flags);
     virtual bool                        authenticateSurfaceTexture(const sp<ISurfaceTexture>& surface) const;
+
+#ifdef QCOM_HDMI_OUT
+    //HDMI Specific
+    virtual void                        enableHDMIOutput(int enable);
+    virtual void                        setActionSafeWidthRatio(float asWidthRatio);
+    virtual void                        setActionSafeHeightRatio(float asHeightRatio);
+#endif
 
     virtual status_t captureScreen(DisplayID dpy,
             sp<IMemoryHeap>* heap,
@@ -298,6 +315,9 @@ private:
             void        handlePageFlip();
             bool        lockPageFlip(const LayerVector& currentLayers);
             void        unlockPageFlip(const LayerVector& currentLayers);
+#ifdef QCOM_HARDWARE
+            bool        isRotationCompleted();
+#endif
             void        handleWorkList();
             void        handleRepaint();
             void        postFramebuffer();
@@ -334,7 +354,14 @@ private:
             void        debugFlashRegions();
             void        debugShowFPS() const;
             void        drawWormhole() const;
-           
+
+#ifdef QCOM_HDMI_OUT
+            //HDMI Specific
+            void updateHwcHDMI(bool enable);
+#endif
+#ifdef QCOM_HARDWARE
+            bool isGPULayerPresent();
+#endif
 
     mutable     MessageQueue    mEventQueue;
 
@@ -387,6 +414,16 @@ private:
                 volatile nsecs_t            mDebugInTransaction;
                 nsecs_t                     mLastTransactionTime;
                 bool                        mBootFinished;
+
+#ifdef QCOM_HDMI_OUT
+                //HDMI specific
+                bool                        mHDMIOutput;
+                Mutex                       mHDMILock;
+                bool                        mOrientationChanged;
+#endif
+#ifdef QCOM_HARDWARE
+                bool                        mCanSkipComposition;
+#endif
 
                 // these are thread safe
     mutable     Barrier                     mReadyToRunBarrier;

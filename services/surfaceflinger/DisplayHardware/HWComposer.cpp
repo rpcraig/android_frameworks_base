@@ -34,6 +34,10 @@
 #include "HWComposer.h"
 #include "SurfaceFlinger.h"
 
+#ifdef QCOM_HARDWARE
+#include <qcom_ui.h>
+#endif
+
 namespace android {
 // ---------------------------------------------------------------------------
 
@@ -89,6 +93,7 @@ status_t HWComposer::createWorkList(size_t numLayers) {
             free(mList);
             size_t size = sizeof(hwc_layer_list) + numLayers*sizeof(hwc_layer_t);
             mList = (hwc_layer_list_t*)malloc(size);
+            memset(mList, 0, size);
             mCapacity = numLayers;
         }
         mList->flags = HWC_GEOMETRY_CHANGED;
@@ -98,6 +103,10 @@ status_t HWComposer::createWorkList(size_t numLayers) {
 }
 
 status_t HWComposer::prepare() const {
+#ifdef QCOM_HARDWARE
+    // Reset the Skip composition flag
+    mList->flags &= ~HWC_SKIP_COMPOSITION;
+#endif
     int err = mHwc->prepare(mHwc, mList);
     if (err == NO_ERROR) {
         size_t numOVLayers = 0;
@@ -115,6 +124,12 @@ status_t HWComposer::prepare() const {
                 case HWC_FRAMEBUFFER:
                     numFBLayers++;
                     break;
+#ifdef QCOM_HARDWARE
+                default:
+                    if(isUpdatingFB((HWCCompositionType)l.compositionType))
+                        numFBLayers++;
+                    break;
+#endif
             }
         }
         mNumOVLayers = numOVLayers;
@@ -167,6 +182,12 @@ hwc_layer_t* HWComposer::getLayers() const {
     return mList ? mList->hwLayers : 0;
 }
 
+#ifdef QCOM_HARDWARE
+uint32_t HWComposer::getFlags() const {
+    return mList ? mList->flags : 0;
+}
+#endif
+
 void HWComposer::dump(String8& result, char* buffer, size_t SIZE,
         const Vector< sp<LayerBase> >& visibleLayersSortedByZ) const {
     if (mHwc && mList) {
@@ -204,6 +225,14 @@ void HWComposer::dump(String8& result, char* buffer, size_t SIZE,
         result.append(buffer);
     }
 }
+
+#ifdef QCOM_HDMI_OUT
+void HWComposer::enableHDMIOutput(bool enable) {
+    if (mHwc) {
+        mHwc->enableHDMIOutput(mHwc, enable);
+    }
+}
+#endif
 
 // ---------------------------------------------------------------------------
 }; // namespace android

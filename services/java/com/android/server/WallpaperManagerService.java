@@ -170,6 +170,7 @@ class WallpaperManagerService extends IWallpaperManager.Stub {
     WallpaperConnection mWallpaperConnection;
     long mLastDiedTime;
     boolean mWallpaperUpdating;
+    boolean mDesiredDimensionChanging;
     
     class WallpaperConnection extends IWallpaperConnection.Stub
             implements ServiceConnection {
@@ -214,6 +215,13 @@ class WallpaperManagerService extends IWallpaperManager.Stub {
         
         public void attachEngine(IWallpaperEngine engine) {
             mEngine = engine;
+             if (engine != null && mDesiredDimensionChanging) {
+                 try {
+                     engine.setDesiredSize(mWidth, mHeight);
+                     mDesiredDimensionChanging = false;
+                 } catch (RemoteException e) {
+                 }
+             }
         }
         
         public ParcelFileDescriptor setWallpaper(String name) {
@@ -396,6 +404,7 @@ class WallpaperManagerService extends IWallpaperManager.Stub {
 
         synchronized (mLock) {
             if (width != mWidth || height != mHeight) {
+                boolean desiredDimensionPropagated = false;
                 mWidth = width;
                 mHeight = height;
                 saveSettingsLocked();
@@ -404,10 +413,14 @@ class WallpaperManagerService extends IWallpaperManager.Stub {
                         try {
                             mWallpaperConnection.mEngine.setDesiredSize(
                                     width, height);
+                            desiredDimensionPropagated = true;
                         } catch (RemoteException e) {
                         }
                         notifyCallbacksLocked();
                     }
+                }
+                if (!desiredDimensionPropagated) {
+                    mDesiredDimensionChanging = true;
                 }
             }
         }

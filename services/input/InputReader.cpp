@@ -2170,6 +2170,14 @@ void CursorInputMapper::process(const RawEvent* rawEvent) {
     if (rawEvent->type == EV_SYN && rawEvent->scanCode == SYN_REPORT) {
         sync(rawEvent->when);
     }
+
+#ifdef LEGACY_TRACKPAD
+    // sync now since BTN_MOUSE is not necessarily followed by SYN_REPORT and 
+    // we need to ensure that we report the up/down promptly.
+    else if (rawEvent->type == EV_KEY && rawEvent->scanCode == BTN_MOUSE) {
+      sync(rawEvent->when);
+    }
+#endif
 }
 
 void CursorInputMapper::sync(nsecs_t when) {
@@ -2255,6 +2263,16 @@ void CursorInputMapper::sync(nsecs_t when) {
     if ((buttonsPressed || moved || scrolled) && getDevice()->isExternal()) {
         policyFlags |= POLICY_FLAG_WAKE_DROPPED;
     }
+
+#ifdef LEGACY_TRACKPAD
+    // Hack to allow legacy trackpads to wake the device (and provide a toggle) 
+    // all input events are either WAKE (1) or WAKE_DROPPED (2) but not both. in this
+    // special case we OR both flags together to produce an (3) which
+    // no input event will ever have besides this one (because its just wrong)
+    if (buttonsPressed && !getDevice()->isExternal()) {
+      policyFlags |= (POLICY_FLAG_WAKE | POLICY_FLAG_WAKE_DROPPED);
+    }
+#endif
 
     // Synthesize key down from buttons if needed.
     synthesizeButtonKeys(getContext(), AKEY_EVENT_ACTION_DOWN, when, getDeviceId(), mSource,

@@ -1227,48 +1227,6 @@ final class ApplicationPackageManager extends PackageManager {
         return null;
     }
 
-    /**
-     * @hide
-     */
-    @Override
-	public String[] getRevokedPermissions(final String pkgName) {
-        try {
-            return mPM.getRevokedPermissions(pkgName);
-        } catch (RemoteException e) {
-            // Should never happen!
-        }
-        return null;
-    }
-
-    /**
-     * @hide
-     */
-    @Override
-	public String[] getGrantedPermissions(final String pkgName) {
-        try {
-            return mPM.getGrantedPermissions(pkgName);
-        } catch (RemoteException e) {
-            // Should never happen!
-        }
-        return null;
-    }
-
-    @Override
-    public void revokePermissions(String pkgName, String[] perms) {
-	try {
-	    mPM.revokePermissions(pkgName, perms);
-	} catch (RemoteException e) {
-	}
-    }
-
-    @Override
-    public void setPermissions(String pkgName, String[] perms) {
-	try {
-	    mPM.setPermissions(pkgName, perms);
-	} catch (RemoteException e) {
-	}
-    }
-
     private final ContextImpl mContext;
     private final IPackageManager mPM;
 

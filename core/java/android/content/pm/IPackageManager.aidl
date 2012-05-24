@@ -364,13 +364,4 @@ interface IPackageManager {
     VerifierDeviceIdentity getVerifierDeviceIdentity();
 
     boolean isFirstBoot();
-
-    String[] getRevokedPermissions(String packageName);
-
-    String[] getGrantedPermissions(String packageName);
-
-    void revokePermissions(String pkgName, in String[] perms);
-
-    void setPermissions(String pkgName, in String[] perms);
-
 }

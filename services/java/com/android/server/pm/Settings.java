@@ -918,13 +918,6 @@ final class Settings {
                     serializer.endTag(null, "item");
                 }
                 serializer.endTag(null, "perms");
-		serializer.startTag(null, "revoked-perms");
-		for (String name : usr.revokedPermissions) {
-		    serializer.startTag(null, "item");
-		    serializer.attribute(null, "name", name);
-		    serializer.endTag(null, "item");
-		}
-		serializer.endTag(null, "revoked-perms");
                 serializer.endTag(null, "shared-user");
             }
 
@@ -1081,18 +1074,6 @@ final class Settings {
             }
         }
         serializer.endTag(null, "perms");
-	serializer.startTag(null, "revoked-perms");
-        if (pkg.sharedUser == null) {
-            for (final String name : pkg.revokedPermissions) {
-                BasePermission bp = mPermissions.get(name);
-                if (bp != null) {
-                    serializer.startTag(null, "item");
-                    serializer.attribute(null, "name", name);
-                    serializer.endTag(null, "item");
-                }
-            }
-        }
-        serializer.endTag(null, "revoked-perms");
         serializer.endTag(null, "updated-package");
     }
 
@@ -1147,21 +1128,7 @@ final class Settings {
                 }
             }
             serializer.endTag(null, "perms");
-	}
-	serializer.startTag(null, "revoked-perms");
-	if (pkg.sharedUser == null) {
-	    // If this is a shared user, the permissions will
-	    // be written there.  We still need to write an
-	    // empty permissions list so permissionsFixed will
-	    // be set.
-	    for (final String name : pkg.revokedPermissions) {
-		serializer.startTag(null, "item");
-		serializer.attribute(null, "name", name);
-		serializer.endTag(null, "item");
-	    }
-	}
-	serializer.endTag(null, "revoked-perms");
-
+        }
         if (pkg.disabledComponents.size() > 0) {
             serializer.startTag(null, "disabled-components");
             for (final String name : pkg.disabledComponents) {
@@ -1534,8 +1501,6 @@ final class Settings {
             String tagName = parser.getName();
             if (tagName.equals("perms")) {
                 readGrantedPermissionsLPw(parser, ps.grantedPermissions);
-	    } else if (tagName.equals("revoked-perms")) {
-		readGrantedPermissionsLPw(parser, ps.revokedPermissions);
             } else {
                 PackageManagerService.reportSettingsProblem(Log.WARN,
                         "Unknown element under <updated-package>: " + parser.getName());
@@ -1743,8 +1708,6 @@ final class Settings {
                 } else if (tagName.equals("perms")) {
                     readGrantedPermissionsLPw(parser, packageSetting.grantedPermissions);
                     packageSetting.permissionsFixed = true;
-		} else if (tagName.equals("revoked-perms")) {
-		    readGrantedPermissionsLPw(parser, packageSetting.revokedPermissions);
                 } else {
                     PackageManagerService.reportSettingsProblem(Log.WARN,
                             "Unknown element under <package>: " + parser.getName());
@@ -1861,8 +1824,6 @@ final class Settings {
                     su.signatures.readXml(parser, mPastSignatures);
                 } else if (tagName.equals("perms")) {
                     readGrantedPermissionsLPw(parser, su.grantedPermissions);
-		} else if (tagName.equals("revoked-perms")) {
-		    readGrantedPermissionsLPw(parser, su.revokedPermissions);
                 } else {
                     PackageManagerService.reportSettingsProblem(Log.WARN,
                             "Unknown element under <shared-user>: " + parser.getName());

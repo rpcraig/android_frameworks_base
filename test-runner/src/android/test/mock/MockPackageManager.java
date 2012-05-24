@@ -560,4 +560,37 @@ public class MockPackageManager extends PackageManager {
     public VerifierDeviceIdentity getVerifierDeviceIdentity() {
         throw new UnsupportedOperationException();
     }
+
+    /**
+     * @hide
+     */
+    @Override
+    public String[] getRevokedPermissions(String packageName) {
+	throw new UnsupportedOperationException();
+    }
+
+    /**
+     * @hide
+     */
+    @Override
+    public String[] getGrantedPermissions(String packageName) {
+	throw new UnsupportedOperationException();
+    }
+
+    /**
+     * @hide
+     */
+    @Override
+	public void revokePermissions(String pkgName, String[] perms) {
+	throw new UnsupportedOperationException();
+    }
+
+    /**
+     * @hide
+     */
+    @Override
+	public void setPermissions(String pkgName, String[] perms) {
+	throw new UnsupportedOperationException();
+    }
+
 }

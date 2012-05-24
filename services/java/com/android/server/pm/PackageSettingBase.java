@@ -162,6 +162,8 @@ class PackageSettingBase extends GrantedPermissions {
     public void copyFrom(PackageSettingBase base) {
         grantedPermissions = base.grantedPermissions;
         gids = base.gids;
+	revokedPermissions = base.revokedPermissions;
+	revokedGids = base.revokedGids;
 
         timeStamp = base.timeStamp;
         firstInstallTime = base.firstInstallTime;

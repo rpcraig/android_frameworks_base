@@ -2656,4 +2656,24 @@ public abstract class PackageManager {
      * @hide
      */
     public abstract VerifierDeviceIdentity getVerifierDeviceIdentity();
+
+    /**
+     *@hide
+     */
+    public abstract String[] getRevokedPermissions(String packageName);
+
+    /**
+     *@hide
+     */
+    public abstract String[] getGrantedPermissions(String packageName);
+
+    /**
+     * @hide
+     */
+    public abstract void revokePermissions(String pkgName, String[] perms);
+
+    /**
+     * @hide
+     */
+    public abstract void setPermissions(String pkgName, String[] perms);
 }

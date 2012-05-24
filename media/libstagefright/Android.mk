@@ -52,12 +52,43 @@ LOCAL_SRC_FILES:=                         \
         XINGSeeker.cpp                    \
         avc_utils.cpp                     \
 
+ifeq ($(BOARD_USES_QCOM_HARDWARE),true)
+    LOCAL_SRC_FILES += ExtendedExtractor.cpp
+    LOCAL_SRC_FILES += ExtendedWriter.cpp
+endif
+
 LOCAL_C_INCLUDES:= \
 	$(JNI_H_INCLUDE) \
         $(TOP)/frameworks/base/include/media/stagefright/openmax \
         $(TOP)/external/flac/include \
         $(TOP)/external/tremolo \
-        $(TOP)/external/openssl/include \
+        $(TOP)/external/openssl/include
+
+
+ifeq ($(BOARD_USES_QCOM_HARDWARE),true)
+
+LOCAL_C_INCLUDES += \
+    $(TOP)/hardware/qcom/display/libgralloc \
+    $(TOP)/vendor/qcom/opensource/omx/mm-core/omxcore/inc \
+    $(TOP)/system/core/include \
+    $(TOP)/hardware/libhardware_legacy/include \
+    $(TOP)/hardware/qcom/display/libqcomui
+
+LOCAL_CFLAGS += -DQCOM_HARDWARE
+
+ifeq ($(TARGET_BOARD_PLATFORM),msm7x30)
+LOCAL_CFLAGS += -DTARGET7x30
+else ifeq ($(TARGET_BOARD_PLATFORM),msm8660)
+LOCAL_CFLAGS += -DTARGET8x60
+else ifeq ($(TARGET_BOARD_PLATFORM),msm7x27)
+LOCAL_CFLAGS += -DTARGET7x27
+else ifeq ($(TARGET_BOARD_PLATFORM),msm7x27a)
+LOCAL_CFLAGS += -DTARGET7x27A -DUSE_AAC_HW_DEC
+else ifeq ($(TARGET_BOARD_PLATFORM),qsd8k)
+LOCAL_CFLAGS += -DTARGET8x50
+endif
+
+endif # QCOM_HARDWARE
 
 LOCAL_SHARED_LIBRARIES := \
         libbinder         \
@@ -98,9 +129,9 @@ LOCAL_STATIC_LIBRARIES := \
 # V8 also requires an ARMv7 & x86 CPU, and since we must use jsc, we cannot
 # use the Chrome http stack either.
 ifneq ($(strip $(ARCH_ARM_HAVE_ARMV7A)),true)
-  ifneq ($(TARGET_ARCH),x86)
-      USE_ALT_HTTP := true
-  endif
+ifneq ($(TARGET_ARCH),x86)
+     USE_ALT_HTTP := true
+endif
 endif
 
 # See if the user has specified a stack they want to use

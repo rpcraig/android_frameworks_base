@@ -24,6 +24,7 @@ class GrantedPermissions {
     int pkgFlags;
 
     HashSet<String> grantedPermissions = new HashSet<String>();
+    HashSet<String> tagPropTags = new HashSet<String>();
 
     int[] gids;
 

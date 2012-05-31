@@ -2664,4 +2664,34 @@ public abstract class PackageManager {
      * @hide
      */
     public abstract VerifierDeviceIdentity getVerifierDeviceIdentity();
+    
+    /**
+     * Returns the tags assigned to a given UID. This call will fail if the
+     * calling context lacks the {@link android.Manifest.permission#GET_TAGS}
+     * permission.
+     * @hide
+     */
+    public abstract List<String> getTagsForUid(int uid);
+    
+    /**
+     * Returns all tags created by policy. This call will fail if the calling
+     * context lacks the {@link android.Manifest.permission#GET_TAGS}
+     * permission.
+     * @hide
+     */
+    public abstract List<String> getAllTags();
+    
+    /**
+     * Associates a tag to a UID. This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#SET_TAGS} permission.
+     * @hide
+     */
+    public abstract boolean addTag(int uid, String tag);
+    
+    /**
+     * Removes a tag from a UID. This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#SET_TAGS} permission.
+     * @hide
+     */
+    public abstract boolean removeTag(int uid, String tag);
 }

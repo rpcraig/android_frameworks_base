@@ -154,6 +154,7 @@ adb shell am instrument -w -e class com.android.unit_tests.PackageManagerTests c
  */
 public class PackageManagerService extends IPackageManager.Stub {
     static final String TAG = "PackageManager";
+    private static final String TAGPROP_TAG = TAG + "_TAGPROP";
     static final boolean DEBUG_SETTINGS = false;
     private static final boolean DEBUG_PREFERRED = false;
     static final boolean DEBUG_UPGRADE = false;
@@ -328,6 +329,18 @@ public class PackageManagerService extends IPackageManager.Stub {
     // etc/permissions.xml file.
     final HashMap<String, FeatureInfo> mAvailableFeatures =
             new HashMap<String, FeatureInfo>();
+    
+    // These are the permissions that were read from the
+    // /etc/permissions.xml file and their security context
+    private final HashMap<String, String> mPermToTagPropTag =
+            new HashMap<String, String>();
+    
+    // These are apps that should not propagate their contexts
+    private final HashSet<String> mTagPropDontProp =
+            new HashSet<String>();
+
+    private final Map<String, Set<String>> mTagPropPolicies =
+            new HashMap<String, Set<String>>();
 
     // All available activities, for your resolving pleasure.
     final ActivityIntentResolver mActivities =
@@ -1298,6 +1311,9 @@ public class PackageManagerService extends IPackageManager.Stub {
                     } else {
                         readInstallPermissionPolicy(parser, packageName);
                     }
+                } else if ("tagprop".equalsIgnoreCase(name)) {
+                    readTagProp(parser);
+                    
                 } else {
                     Slog.i(TAG, "Got unknown XML element in mac_permissions.xml: <"+name+">");
                     XmlUtils.skipCurrentTag(parser);
@@ -1348,6 +1364,145 @@ public class PackageManagerService extends IPackageManager.Stub {
 
         if (allowedPerms.size() > 0)
             mInstallPermissionPolicy.put(packageName, allowedPerms);
+    }
+    
+    private void readTagProp(XmlPullParser parser)
+            throws XmlPullParserException, IOException {
+
+        int outerDepth = parser.getDepth();
+        int type;
+        while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
+                && (type != XmlPullParser.END_TAG
+                || parser.getDepth() > outerDepth)) {
+            if (type == XmlPullParser.END_TAG
+                    || type == XmlPullParser.TEXT) {
+                continue;
+            }
+
+            String element = parser.getName();
+
+            if ("tag".equalsIgnoreCase(element)) {
+                String tag = parser.getAttributeValue(null, "name");
+                if (tag == null) {
+                    Slog.e(TAGPROP_TAG, "<tag> without name at "
+                            + parser.getPositionDescription());
+                    XmlUtils.skipCurrentTag(parser);
+                } else {
+                    Slog.v(TAGPROP_TAG, "Found <tag> at "
+                            + parser.getPositionDescription());
+                    readTagPropTag(parser, tag);
+                }
+                
+            } else if ("policy".equalsIgnoreCase(element)) {
+                String name = parser.getAttributeValue(null, "name");
+                if (name == null) {
+                    Slog.e(TAGPROP_TAG, "<policy> without name at "
+                            + parser.getPositionDescription());
+                    XmlUtils.skipCurrentTag(parser);
+                } else {
+                    Slog.v(TAGPROP_TAG, "Found <policy> " + name + " at "
+                            + parser.getPositionDescription());
+                    readTagPropPolicy(parser, name);
+                }
+                
+            } else if ("dont-propagate".equals(element)) {
+                String appName = parser.getAttributeValue(null, "app-name");
+                if (appName == null) {
+                    Slog.e(TAGPROP_TAG, "<dont-propagate> without name at "
+                            + parser.getPositionDescription());
+                    XmlUtils.skipCurrentTag(parser);
+                } else {
+                    Slog.v(TAGPROP_TAG, "Found <dont-propagate> " + appName
+                            + " at " + parser.getPositionDescription());
+                    mTagPropDontProp.add(appName);
+                }
+
+            } else {
+                Slog.i(TAGPROP_TAG, "Got unknown XML element in <" + element + "> at "
+                        + parser.getPositionDescription());
+                XmlUtils.skipCurrentTag(parser);
+            }
+        }
+        
+        Slog.d(TAGPROP_TAG, "Tags: " + mPermToTagPropTag.toString());
+        Slog.d(TAGPROP_TAG, "Dont-prop: " + mTagPropDontProp.toString());
+    }
+
+    private void readTagPropTag(XmlPullParser parser, String tag)
+            throws XmlPullParserException, IOException {
+
+        int outerDepth = parser.getDepth();
+        int type;
+        while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
+                && (type != XmlPullParser.END_TAG
+                || parser.getDepth() > outerDepth)) {
+            if (type == XmlPullParser.END_TAG
+                    || type == XmlPullParser.TEXT) {
+                continue;
+            }
+
+            String element = parser.getName();
+
+            if ("permission".equalsIgnoreCase(element)) {
+                String permName = parser.getAttributeValue(null, "name");
+                if (permName != null) {
+                    mPermToTagPropTag.put(permName, tag);
+                    
+                } else {
+                    Slog.e(TAGPROP_TAG, "<permission> without name at "
+                            + parser.getPositionDescription());
+                    XmlUtils.skipCurrentTag(parser);
+                }
+            } else {
+                Slog.i(TAGPROP_TAG, "Got unknown XML element in <" + element +
+                        "> at " + parser.getPositionDescription());
+                XmlUtils.skipCurrentTag(parser);
+            }
+        }
+    }
+
+    private void readTagPropPolicy(XmlPullParser parser, String name)
+            throws XmlPullParserException, IOException {
+        
+        Set<String> pol = new HashSet<String>();
+        
+        int outerDepth = parser.getDepth();
+        int type;
+        while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
+                && (type != XmlPullParser.END_TAG
+                || parser.getDepth() > outerDepth)) {
+            if (type == XmlPullParser.END_TAG
+                    || type == XmlPullParser.TEXT) {
+                continue;
+            }
+
+            String element = parser.getName();
+            
+            if ("tag".equalsIgnoreCase(element)) {
+                String tag = parser.getAttributeValue(null, "name");
+                if (tag == null) {
+                    Slog.e(TAGPROP_TAG, "<tag> without name at "
+                            + parser.getPositionDescription());
+                    XmlUtils.skipCurrentTag(parser);
+                } else if (!mPermToTagPropTag.containsValue(tag)) {
+                    Slog.e(TAGPROP_TAG, "Tag " + tag + " given at " +
+                            parser.getPositionDescription()+" is undefined. "+
+                            "Policy " + name + " will not be implemented.");
+                    pol = null;
+                    XmlUtils.skipCurrentTag(parser);
+                } else {
+                    if (pol != null)
+                        pol.add(tag);
+                }
+            } else {
+                Slog.i(TAGPROP_TAG, "Got unknown XML element in <" + element +
+                        "> at " + parser.getPositionDescription());
+                XmlUtils.skipCurrentTag(parser);
+            }
+        }
+        
+        if (pol != null && pol.size() > 0)
+            mTagPropPolicies.put(name, pol);
     }
 
     void readPermissions() {
@@ -1981,6 +2136,126 @@ public class PackageManagerService extends IPackageManager.Stub {
             }
         }
         return PackageManager.PERMISSION_DENIED;
+    }
+    
+    public boolean passedCommsPolicy(int fromUid, int toUid) {
+
+        //Slog.d(TAGPROP_TAG, "Checking uid " + fromUid + " to uid " + toUid);
+
+        /* XXX Assume that system applications are not leaking info. The 
+         * Woodpecker work at NDSS '12 shows this is a bad idea, but lets use 
+         * it for now to get a working system
+         */
+        if (fromUid < Process.FIRST_APPLICATION_UID
+                || toUid < Process.FIRST_APPLICATION_UID) {
+            //Slog.d(TAGPROP_TAG, "Checking uid " + fromUid + " to uid " +
+            //    toUid + " -> EXCEPTED");
+            return true;
+        }
+
+        Slog.d(TAGPROP_TAG, "Checking uid " + fromUid + " to uid " + toUid);
+
+        synchronized (mPackages) {
+            /* XXX Crude hack to make dont-propagate into a whitelist. Need this
+             * for now to get a working system
+             */
+            for (String appName : mTagPropDontProp) {
+                int appUid = mPackages.get(appName).applicationInfo.uid;
+                if (fromUid == appUid || toUid == appUid) {
+                    Slog.d(TAGPROP_TAG, "Checking uid " + fromUid +
+                            " to uid " + toUid + " -> EXCEPTED");
+                    return true;
+                }
+            }
+
+            Object fromObj = mSettings.getUserIdLPr(fromUid);
+            Object toObj = mSettings.getUserIdLPr(toUid);
+            if (fromObj != null && toObj != null) {
+                GrantedPermissions fromGp = (GrantedPermissions)fromObj;
+                GrantedPermissions toGp = (GrantedPermissions)toObj;
+                HashSet<String> fromTags = fromGp.tagPropTags;
+                HashSet<String> toTags = toGp.tagPropTags;
+
+                //DEBUG
+                String fromPkg = null, toPkg = null;
+                for (PackageParser.Package p : mPackages.values()) {
+                    if (p.applicationInfo.uid == toUid)
+                        toPkg = p.packageName;
+                    else if (p.applicationInfo.uid == fromUid)
+                        fromPkg = p.packageName;
+                }
+
+                Slog.d(TAGPROP_TAG, "From uid " + fromUid + " (" + fromPkg +")"
+                        + " has tags " + fromTags);
+                Slog.d(TAGPROP_TAG, "To uid " + toUid + " (" + toPkg +")"
+                        + " has tags " + toTags);
+
+                if (fromTags.equals(toTags)) {
+                    Slog.d(TAGPROP_TAG, "Both UIDs have same tags");
+                    return true;
+                }
+
+                HashSet<String> unionTags = new HashSet<String>(
+                        fromTags.size() + toTags.size());
+                unionTags.addAll(fromTags);
+                unionTags.addAll(toTags);
+
+                for (String polName : mTagPropPolicies.keySet()) {
+
+                    Set<String> pol = mTagPropPolicies.get(polName);
+
+                    if (fromTags.containsAll(pol) && toTags.containsAll(pol)) {
+                        // Allow comms between apps if there is no priv esc
+                        Slog.d(TAGPROP_TAG, "Both UIDs already have denied " +
+                        		"tags in policy " + polName);
+
+                    } else if (unionTags.containsAll(pol)) {
+                        // Fail fast if two apps together exceed authorization
+                        Slog.e(TAGPROP_TAG, "DENIAL: Union of tags"
+                                + " from "+fromUid+" ("+fromPkg+") "+fromTags
+                                + " to " + toUid + " ("+toPkg+") " + toTags
+                                + " matched policy " + polName);
+                        StringBuilder sb = new StringBuilder();
+                        //XXX DEBUGGING
+                        Slog.v(TAGPROP_TAG, sb.toString(), new Exception());
+
+                        return false;
+                    }
+                }
+
+                //Propagate tags -- XXX should I make a copy of the HashSets?
+                boolean propagate = true;
+                propagate = fromUid >= Process.FIRST_APPLICATION_UID;
+                propagate = toUid >= Process.FIRST_APPLICATION_UID;
+                if (propagate) {
+                    for (String appName : mTagPropDontProp) {
+                        int appUid = mPackages.get(appName).applicationInfo.uid;
+                        if (fromUid == appUid || toUid == appUid) {
+                            propagate = false;
+                            break;
+                        }
+                    }
+                }
+                if (propagate) {
+                    fromGp.tagPropTags.addAll(toTags);
+                    toGp.tagPropTags.addAll(fromTags);
+                    Slog.i(TAGPROP_TAG, "PROP: Propagated tags " +
+                    		"to uid "+ fromUid + ": " + fromGp.tagPropTags);
+                    Slog.i(TAGPROP_TAG, "PROP: Propagated tags " +
+                    		"to uid " + toUid +": " + toGp.tagPropTags);
+
+                } else {
+                    Slog.d(TAGPROP_TAG, "Uid excepted from tags propagation");
+                }
+
+            } else {
+                //XXX shut this up for now -- figure out when this occurs
+                //Slog.d(TAGPROP_TAG, "From uid " + fromUid + " has no settings objects");
+                //Slog.d(TAGPROP_TAG, "To uid " + toUid + " has no settings objects");
+            }
+        }
+
+        return true;
     }
 
     private BasePermission findPermissionTreeLP(String permName) {
@@ -4493,6 +4768,13 @@ public class PackageManagerService extends IPackageManager.Stub {
             ps.permissionsFixed = true;
         }
         ps.haveGids = true;
+        
+        for (String perm : gp.grantedPermissions) {
+            String tag = mPermToTagPropTag.get(perm);
+            if (tag != null)
+                gp.tagPropTags.add(tag);
+        }
+        Slog.w(TAG, "Package " + pkg.packageName + " has tags " + gp.tagPropTags);
     }
     
     private final class ActivityIntentResolver
@@ -8843,5 +9125,81 @@ public class PackageManagerService extends IPackageManager.Stub {
         synchronized (mPackages) {
             return mSettings.getVerifierDeviceIdentityLPw();
         }
+    }
+    
+    // Here begins functions for the Tag propagation for the public api of PackageManager
+    @Override
+    public List<String> getTagsForUid(int uid) {
+        
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.GET_TAGS, null);
+        
+        synchronized (mPackages) {
+            GrantedPermissions gp = (GrantedPermissions) mSettings.getUserIdLPr(
+                    uid);
+            if (null == gp)
+                return null;
+            
+            List<String> tags = new ArrayList<String>(gp.tagPropTags.size());
+            tags.addAll(gp.tagPropTags);
+            return tags;
+        }
+    }
+    
+    //XXX Should this be bundled into a PermissionInfo structure?
+    @Override
+    public List<String> getAllTags() {
+        
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.GET_TAGS, null);
+        
+        ArrayList<String> list = new ArrayList<String>(
+                new HashSet<String>(mPermToTagPropTag.values()));
+        Collections.sort(list);
+        return list;
+    }
+    
+    @Override
+    public boolean addTag(int uid, String tag) {
+        
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.SET_TAGS, null);
+        
+        if (uid < FIRST_APPLICATION_UID) {
+            Slog.e(TAG, "Not allowed to add tag for uid " + uid);
+            return false;
+        }
+        synchronized (mPackages) {
+            GrantedPermissions gp = (GrantedPermissions) mSettings.getUserIdLPr(
+                    uid);
+            if (null == gp)
+                return false;
+            
+            //TODO validate the tag string
+            gp.tagPropTags.add(tag);
+        }
+        return true;
+    }
+    
+    @Override
+    public boolean removeTag(int uid, String tag) {
+        
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.SET_TAGS, null);
+        
+        if (uid < FIRST_APPLICATION_UID) {
+            Slog.e(TAG, "Not allowed to remove tag for uid " + uid);
+            return false;
+        }
+        synchronized (mPackages) {
+            GrantedPermissions gp = (GrantedPermissions) mSettings.getUserIdLPr(
+                    uid);
+            if (null == gp)
+                return false;
+            
+            //TODO validate the tag string
+            gp.tagPropTags.remove(tag);
+        }
+        return true;
     }
 }

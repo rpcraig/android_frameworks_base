@@ -1496,6 +1496,16 @@
     <!-- Description of an application permission, listed so the user can choose whether they want to allow the application to do this. -->
     <string name="permdesc_modifyNetworkAccounting">Allows modification of how network usage is accounted against applications. Not for use by normal applications.</string>
 
+    <!-- Title of policy access to get tags [CHAR LIMIT=30] -->
+    <string name="permlab_getTags">Get tags</string>
+    <!-- Description of policy access to get tags of a given uid [CHAR LIMIT=110]-->
+    <string name="permdesc_getTags">Get tags set for a uid</string>
+
+    <!-- Title of policy access to set tags [CHAR LIMIT=30] -->
+    <string name="permlab_setTags">Set tags</string>
+    <!-- Description of policy access to set tags of a given uid [CHAR LIMIT=110]-->
+    <string name="permdesc_setTags">Add or remove tags given to a uid</string>
+
     <!-- Policy administration -->
 
     <!-- Title of policy access to limiting the user's password choices -->

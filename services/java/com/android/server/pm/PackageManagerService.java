@@ -315,6 +315,9 @@ public class PackageManagerService extends IPackageManager.Stub {
     // Temporary for building the final shared libraries for an .apk.
     String[] mTmpSharedLibraries = null;
 
+    // Has the mac_permissions.xml been found
+    private final boolean isMacPolicyEnabled;
+
     // These are the features this devices supports that were read from the
     // etc/permissions.xml file.
     final HashMap<String, FeatureInfo> mAvailableFeatures =
@@ -1047,6 +1050,9 @@ public class PackageManagerService extends IPackageManager.Stub {
                 }
             }
 
+            // Find policy
+            isMacPolicyEnabled = scanPolicy();
+
             // Find base frameworks (resource packages without code).
             mFrameworkInstallObserver = new AppDirObserver(
                 mFrameworkDir.getPath(), OBSERVER_EVENTS, true);
@@ -1232,6 +1238,60 @@ public class PackageManagerService extends IPackageManager.Stub {
             }
         }
         mSettings.removePackageLPw(ps.name);
+    }
+
+    boolean scanPolicy() {
+        File dataDir = Environment.getDataDirectory();
+        File rootDir = Environment.getRootDirectory();
+
+        File[] policyFileLocations = new File[]{
+            new File(dataDir, "system/mac_permissions.xml"),
+            new File(rootDir, "etc/security/mac_permissions.xml"),
+            null};
+
+        FileReader policyFile = null;
+        int i = 0;
+        while (policyFile == null && policyFileLocations[i] != null) {
+            try {
+                policyFile = new FileReader(policyFileLocations[i]);
+                break;
+            } catch (FileNotFoundException e) {
+                Slog.d(TAG,"Couldn't find permissions file " + policyFileLocations[i]);
+            }
+            i++;
+        }
+
+        if (policyFile == null) {
+            Slog.d(TAG, "No mac_permissions.xml policy file found. Starting in disabled mode.");
+            return false;
+        }
+
+        Slog.d(TAG, "Middleware policy starting in enabled mode.");
+
+        boolean enforcing = SystemProperties.getBoolean("persist.mac_enforcing_mode", false);
+        String mode = enforcing ? "enforcing" : "permissive";
+        Slog.d(TAG, "Middleware policy starting in " + mode + " mode.");
+
+        try {
+            XmlPullParser parser = Xml.newPullParser();
+            parser.setInput(policyFile);
+
+            XmlUtils.beginDocument(parser, "policy");
+
+            while (true) {
+                XmlUtils.nextElement(parser);
+                if (parser.getEventType() == XmlPullParser.END_DOCUMENT) {
+                    break;
+                }
+                String name = parser.getName();
+            }
+            policyFile.close();
+        } catch (XmlPullParserException e) {
+            Slog.w(TAG, "Got execption parsing permissions for mac_permissions.xml." + e);
+        } catch (IOException e) {
+            Slog.w(TAG, "Got execption parsing permissions for mac_permissions.xml." + e);
+        }
+        return true;
     }
 
     void readPermissions() {

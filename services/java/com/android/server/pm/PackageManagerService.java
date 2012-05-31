@@ -33,6 +33,7 @@ import com.android.server.IntentResolver;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
+import org.xmlpull.v1.XmlSerializer;
 
 import android.app.ActivityManagerNative;
 import android.app.IActivityManager;
@@ -114,6 +115,7 @@ import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
 import java.security.cert.CertificateException;
@@ -314,6 +316,10 @@ public class PackageManagerService extends IPackageManager.Stub {
 
     // Temporary for building the final shared libraries for an .apk.
     String[] mTmpSharedLibraries = null;
+
+    // Available policy read from mac_permissions.xml
+    private HashMap<String, HashSet<String>> mInstallPermissionPolicy =
+        new HashMap<String, HashSet<String>>();
 
     // Has the mac_permissions.xml been found
     private final boolean isMacPolicyEnabled;
@@ -1284,6 +1290,19 @@ public class PackageManagerService extends IPackageManager.Stub {
                     break;
                 }
                 String name = parser.getName();
+                if ("install-permission".equals(name)) {
+                    String packageName = parser.getAttributeValue(null, "package-name");
+                    if (packageName == null) {
+                        Slog.d(TAG, "<install-permission> without package-name at "
+                               + parser.getPositionDescription() + " in mac_permissions.xml");
+                    } else {
+                        readInstallPermissionPolicy(parser, packageName);
+                    }
+                } else {
+                    Slog.i(TAG, "Got unknown XML element in mac_permissions.xml: <"+name+">");
+                    XmlUtils.skipCurrentTag(parser);
+                    continue;
+                }
             }
             policyFile.close();
         } catch (XmlPullParserException e) {
@@ -1292,6 +1311,43 @@ public class PackageManagerService extends IPackageManager.Stub {
             Slog.w(TAG, "Got execption parsing permissions for mac_permissions.xml." + e);
         }
         return true;
+    }
+
+    void readInstallPermissionPolicy(XmlPullParser parser, String packageName)
+        throws IOException, XmlPullParserException {
+
+        HashSet<String> allowedPerms = new HashSet<String>();
+
+        // clear out the old
+        mInstallPermissionPolicy.clear();
+
+        int outerDepth = parser.getDepth();
+        int type;
+        while ((type=parser.next()) != XmlPullParser.END_DOCUMENT
+               && (type != XmlPullParser.END_TAG
+                   || parser.getDepth() > outerDepth)) {
+            if (type == XmlPullParser.END_TAG
+                || type == XmlPullParser.TEXT) {
+                continue;
+            }
+
+            String tagName = parser.getName();
+            if ("allowed-permission".equals(tagName)) {
+                String permName = parser.getAttributeValue(null, "name");
+                if (permName != null) {
+                    allowedPerms.add(permName);
+                } else {
+                    Slog.d(TAG, "<allowed-permission> without name at "
+                           + parser.getPositionDescription());
+                }
+
+                XmlUtils.skipCurrentTag(parser);
+            }
+
+        }
+
+        if (allowedPerms.size() > 0)
+            mInstallPermissionPolicy.put(packageName, allowedPerms);
     }
 
     void readPermissions() {
@@ -3185,6 +3241,30 @@ public class PackageManagerService extends IPackageManager.Stub {
         }
     }
 
+    private String buildInstallMACStanza(String packageName, ArrayList<String> permissions) {
+        XmlSerializer xmlSerializer = Xml.newSerializer();
+        StringWriter writer = new StringWriter();
+
+        try {
+            xmlSerializer.setOutput(writer);
+            // open tag: <install-permission>
+            xmlSerializer.startTag("", "install-permission");
+            xmlSerializer.attribute("", "package-name", packageName);
+            for (Iterator i = permissions.iterator(); i.hasNext();) {
+                // tag: <allowed-permission>
+                xmlSerializer.startTag("", "allowed-permission");
+                xmlSerializer.attribute("", "name", (String)i.next());
+                xmlSerializer.endTag("", "allowed-permission");
+            }
+            // end tag: <install-permission>
+            xmlSerializer.endTag("", "install-permission");
+            xmlSerializer.endDocument();
+        } catch (Exception e) {
+            Slog.e(TAG, "Error occurred while creating install permission stanza." + e);
+        }
+        return writer.toString();
+    }
+
     private PackageParser.Package scanPackageLI(PackageParser.Package pkg,
             int parseFlags, int scanMode, long currentTime) {
         File scanFile = new File(pkg.mScanPath);
@@ -3196,6 +3276,27 @@ public class PackageManagerService extends IPackageManager.Stub {
             return null;
         }
         mScanningPath = scanFile;
+
+        // Verify requested permissions are allowed by policy, exempt system apps though
+        if (isMacPolicyEnabled && (parseFlags & PackageParser.PARSE_IS_SYSTEM) == 0 &&
+            !pkg.requestedPermissions.isEmpty()) {
+
+            HashSet<String> installPolicy = mInstallPermissionPolicy.get(pkg.packageName);
+
+            for (Iterator i = pkg.requestedPermissions.iterator(); i.hasNext();) {
+                String perm = (String)i.next();
+                if (installPolicy == null || !installPolicy.contains(perm)) {
+                    Slog.d(TAG, "Policy denied for package '" + pkg.packageName + "'");
+                    String stanza = buildInstallMACStanza(pkg.packageName, pkg.requestedPermissions);
+                    Slog.d(TAG, stanza);
+                    if (SystemProperties.getBoolean("persist.mac_enforcing_mode", false)) {
+                        mLastScanError = PackageManager.INSTALL_FAILED_POLICY_REJECTED_PERMISSION;
+                        return null;
+                    }
+                    break;
+                }
+            }
+        }
 
         if ((parseFlags&PackageParser.PARSE_IS_SYSTEM) != 0) {
             pkg.applicationInfo.flags |= ApplicationInfo.FLAG_SYSTEM;

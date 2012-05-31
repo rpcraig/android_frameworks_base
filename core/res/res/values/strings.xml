@@ -1496,6 +1496,21 @@
     <!-- Description of an application permission, listed so the user can choose whether they want to allow the application to do this. -->
     <string name="permdesc_modifyNetworkAccounting">Allows modification of how network usage is accounted against applications. Not for use by normal applications.</string>
 
+    <!-- Title of policy access to get permissions of a given uid [CHAR LIMIT=30] -->
+    <string name="permlab_getPermissions">Get permissions</string>
+    <!-- Description of policy access to get permissions of a given uid [CHAR LIMIT=110]-->
+    <string name="permdesc_getPermissions">Retrieve the set of permissions</string>
+
+    <!-- Title of policy access to set permissions of a given uid [CHAR LIMIT=30] -->
+    <string name="permlab_setPermissions">Set permissions</string>
+    <!-- Description of policy access to set permissions of a given uid [CHAR LIMIT=110]-->
+    <string name="permdesc_setPermissions">Allow the setting of a new permission</string>
+
+    <!-- Title of policy access to revoke permissions of a given uid [CHAR LIMIT=30] -->
+    <string name="permlab_revokePermissions">Revoke permissions</string>
+    <!-- Description of policy access to revoke permissions of a given uid [CHAR LIMIT=110]-->
+    <string name="permdesc_revokePermissions">Allow the revocation of an already granted permissions</string>
+
     <!-- Policy administration -->
 
     <!-- Title of policy access to limiting the user's password choices -->

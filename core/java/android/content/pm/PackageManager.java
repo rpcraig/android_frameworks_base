@@ -2656,4 +2656,57 @@ public abstract class PackageManager {
      * @hide
      */
     public abstract VerifierDeviceIdentity getVerifierDeviceIdentity();
+
+    /**
+     * Returns the permissions granted to a given package.
+     * If the package has a shared user id then the granted
+     * permissions for that package will be returned.
+     * This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#GET_PERMISSIONS} permission
+     *
+     * @param pkgName Name of the package
+     * @return String array of granted permissions
+     * @hide
+     */
+    public abstract String[] getGrantedPermissions(String pkgName);
+
+    /**
+     * Returns the permissions revoked in a given package.
+     * If the package has a shared user id then the revoked
+     * permissions for that package will be returned.
+     * This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#GET_PERMISSIONS} permission
+     *
+     * @param pkgName Name of the package
+     * @return String array of revoked permissions
+     * @hide
+     */
+    public abstract String[] getRevokedPermissions(String pkgName);
+
+    /**
+     * Sets permissions for a given package.
+     * If the package has a shared user id then this
+     * method will set permissions for that shared user id.
+     * This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#SET_PERMISSIONS} permission
+     *
+     * @param pkgName Name of the package
+     * @param perms String array of the permissions to add
+     * @hide
+     */
+    public abstract void setPermissions(String pkgName, String[] perms);
+
+    /**
+     * Removes permissions previously granted to a package.
+     * If the package has a shared user id then this
+     * method will remove permissions for that shared user id.
+     * This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#REVOKE_PERMISSIONS} permission
+     *
+     * @param pkgName Name of the package
+     * @param perms String array of the permissions to remove
+     * @hide
+     */
+    public abstract void revokePermissions(String pkgName, String[] perms);
+
 }

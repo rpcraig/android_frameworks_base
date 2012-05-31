@@ -77,9 +77,9 @@ interface IPackageManager {
     int checkPermission(String permName, String pkgName);
     
     int checkUidPermission(String permName, int uid);
-    
+
     boolean addPermission(in PermissionInfo info);
-    
+
     void removePermission(String name);
     
     boolean isProtectedBroadcast(String actionName);
@@ -364,4 +364,12 @@ interface IPackageManager {
     VerifierDeviceIdentity getVerifierDeviceIdentity();
 
     boolean isFirstBoot();
+
+    String[] getGrantedPermissions(String pkgName);
+
+    String[] getRevokedPermissions(String pkgName);
+
+    void revokePermissions(String pkgName, in String[] perms);
+
+    void setPermissions(String pkgName, in String[] perms);
 }

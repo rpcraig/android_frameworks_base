@@ -1622,7 +1622,8 @@ public class PackageManagerService extends IPackageManager.Stub {
             if (p != null) {
                 final PackageSetting ps = (PackageSetting)p.mExtras;
                 final SharedUserSetting suid = ps.sharedUser;
-                return suid != null ? suid.gids : ps.gids;
+                return suid != null ? removeInts(suid.gids, suid.revokedGids)
+                    : removeInts(ps.gids, ps.revokedGids);
             }
         }
         // stupid thing to indicate an error.
@@ -1898,10 +1899,10 @@ public class PackageManagerService extends IPackageManager.Stub {
             if (p != null && p.mExtras != null) {
                 PackageSetting ps = (PackageSetting)p.mExtras;
                 if (ps.sharedUser != null) {
-                    if (ps.sharedUser.grantedPermissions.contains(permName)) {
+                    if (ps.sharedUser.effectivePermissions.contains(permName)) {
                         return PackageManager.PERMISSION_GRANTED;
                     }
-                } else if (ps.grantedPermissions.contains(permName)) {
+                } else if (ps.effectivePermissions.contains(permName)) {
                     return PackageManager.PERMISSION_GRANTED;
                 }
             }
@@ -1914,7 +1915,7 @@ public class PackageManagerService extends IPackageManager.Stub {
             Object obj = mSettings.getUserIdLPr(uid);
             if (obj != null) {
                 GrantedPermissions gp = (GrantedPermissions)obj;
-                if (gp.grantedPermissions.contains(permName)) {
+                if (gp.effectivePermissions.contains(permName)) {
                     return PackageManager.PERMISSION_GRANTED;
                 }
             } else {
@@ -4237,13 +4238,24 @@ public class PackageManagerService extends IPackageManager.Stub {
             for (PackageParser.Package pkg : mPackages.values()) {
                 if (pkg != pkgInfo) {
                     grantPermissionsLPw(pkg, replaceAll);
+                    updateRevokeInfo(pkg);
                 }
             }
         }
         
         if (pkgInfo != null) {
             grantPermissionsLPw(pkgInfo, replace);
+            updateRevokeInfo(pkgInfo);
         }
+    }
+
+    private void updateRevokeInfo(PackageParser.Package pkg) {
+        final PackageSetting ps = (PackageSetting)pkg.mExtras;
+        if (ps == null) {
+            return;
+        }
+        final GrantedPermissions gp = ps.sharedUser != null ? ps.sharedUser : ps;
+        updateEffectivePermissions(gp);
     }
 
     private void grantPermissionsLPw(PackageParser.Package pkg, boolean replace) {
@@ -4959,6 +4971,101 @@ public class PackageManagerService extends IPackageManager.Stub {
 
         private final String mRootDir;
         private final boolean mIsRom;
+    }
+
+    public String[] getGrantedPermissions(final String pkgName) {
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.GET_PERMISSIONS, null);
+
+        String result[] = null;
+        synchronized (mPackages) {
+            final PackageParser.Package p = mPackages.get(pkgName);
+            if (p != null && p.mExtras != null) {
+                final PackageSetting ps = (PackageSetting)p.mExtras;
+                if (ps.sharedUser != null) {
+                    result = new String[ps.sharedUser.grantedPermissions.size()];
+                    ps.sharedUser.grantedPermissions.toArray(result);
+                } else {
+                    result = new String[ps.grantedPermissions.size()];
+                    ps.grantedPermissions.toArray(result);
+                }
+            }
+        }
+        return result;
+    }
+
+    public String[] getRevokedPermissions(final String pkgName) {
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.GET_PERMISSIONS, null);
+
+        String[] result = null;
+        synchronized (mPackages) {
+            final PackageParser.Package p = mPackages.get(pkgName);
+            if (p != null && p.mExtras != null) {
+                final PackageSetting ps = (PackageSetting)p.mExtras;
+                if (ps.sharedUser != null) {
+                    result = new String[ps.sharedUser.revokedPermissions.size()];
+                    ps.sharedUser.revokedPermissions.toArray(result);
+                } else {
+                    result = new String[ps.revokedPermissions.size()];
+                    ps.revokedPermissions.toArray(result);
+                }
+            }
+        }
+        return result;
+    }
+
+    public void revokePermissions(final String pkgName, final String[] perms) {
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.REVOKE_PERMISSIONS, null);
+
+        synchronized (mPackages) {
+            final PackageParser.Package p = mPackages.get(pkgName);
+            if (p != null && p.mExtras != null) {
+                final PackageSetting ps = (PackageSetting)p.mExtras;
+                final GrantedPermissions gp = ps.sharedUser == null ? ps : ps.sharedUser;
+                for (String perm : perms) {
+                    // only allow revoked perms of the original granted set
+                    if (gp.grantedPermissions.contains(perm)) {
+                        gp.revokedPermissions.add(perm);
+                        final BasePermission bp = mSettings.mPermissions.get(perm);
+                        gp.revokedGids = appendInts(gp.revokedGids, bp.gids);
+                    }
+                }
+                updateEffectivePermissions(gp);
+                mSettings.writeLPr();
+            }
+        }
+    }
+
+    public void setPermissions(final String pkgName, final String[] perms) {
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.SET_PERMISSIONS, null);
+
+        synchronized (mPackages) {
+            final PackageParser.Package p = mPackages.get(pkgName);
+            if (p != null && p.mExtras != null) {
+                final PackageSetting ps = (PackageSetting)p.mExtras;
+                final GrantedPermissions gp = ps.sharedUser == null ? ps : ps.sharedUser;
+                for (String perm : perms) {
+                    // only allow a permission to be set that was previously revoked
+                    if (gp.revokedPermissions.remove(perm)) {
+                        final BasePermission bp = mSettings.mPermissions.get(perm);
+                        gp.revokedGids = removeInts(gp.revokedGids, bp.gids);
+                    } else {
+                        Log.d(TAG, "Can't set permission " + perm + " for package " + pkgName);
+                    }
+                }
+                updateEffectivePermissions(gp);
+                mSettings.writeLPr();
+            }
+        }
+    }
+
+    public static void updateEffectivePermissions(final GrantedPermissions gp) {
+        gp.effectivePermissions.clear();
+        gp.effectivePermissions.addAll(gp.grantedPermissions);
+        gp.effectivePermissions.removeAll(gp.revokedPermissions);
     }
 
     /* Called when a downloaded package installation has been confirmed by the user */

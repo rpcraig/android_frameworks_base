@@ -1507,6 +1507,33 @@
         android:description="@string/permdesc_bindPackageVerifier"
         android:protectionLevel="signature" />
 
+    <!-- Allows an application to get the set of android permissions
+         for a given uid
+         @hide
+    -->
+    <permission android:name="android.permission.GET_PERMISSIONS"
+        android:label="@string/permlab_getPermissions"
+        android:description="@string/permdesc_getPermissions"
+        android:protectionLevel="signature" />
+
+    <!-- Allows an application to revoke an android permission
+         for a given uid
+         @hide
+    -->
+    <permission android:name="android.permission.REVOKE_PERMISSIONS"
+        android:label="@string/permlab_revokePermissions"
+        android:description="@string/permdesc_revokePermissions"
+        android:protectionLevel="signature" />
+
+    <!-- Allows an application to set a new android permission
+         for a given uid
+         @hide
+    -->
+    <permission android:name="android.permission.SET_PERMISSIONS"
+        android:label="@string/permlab_setPermissions"
+        android:description="@string/permdesc_setPermissions"
+        android:protectionLevel="signature" />
+
     <!-- The system process is explicitly the only one allowed to launch the
          confirmation UI for full backup/restore -->
     <uses-permission android:name="android.permission.CONFIRM_FULL_BACKUP"/>

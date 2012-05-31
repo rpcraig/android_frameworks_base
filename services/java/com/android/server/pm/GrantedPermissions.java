@@ -24,8 +24,14 @@ class GrantedPermissions {
     int pkgFlags;
 
     HashSet<String> grantedPermissions = new HashSet<String>();
+    HashSet<String> revokedPermissions = new HashSet<String>();
+    HashSet<String> effectivePermissions = new HashSet<String>();
+
+    //XXX this tag stuff probably shouldnt be in here
+    HashSet<String> tagPropTags = new HashSet<String>();
 
     int[] gids;
+    int[] revokedGids;
 
     GrantedPermissions(int pkgFlags) {
         setFlags(pkgFlags);
@@ -35,9 +41,15 @@ class GrantedPermissions {
     GrantedPermissions(GrantedPermissions base) {
         pkgFlags = base.pkgFlags;
         grantedPermissions = (HashSet<String>) base.grantedPermissions.clone();
+        revokedPermissions = (HashSet<String>) base.revokedPermissions.clone();
+        effectivePermissions = (HashSet<String>) base.effectivePermissions.clone();
 
         if (base.gids != null) {
             gids = base.gids.clone();
+        }
+
+        if (base.revokedGids != null) {
+            revokedGids = base.revokedGids.clone();
         }
     }
 

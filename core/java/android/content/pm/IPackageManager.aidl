@@ -42,6 +42,8 @@ import android.content.pm.VerifierDeviceIdentity;
 import android.net.Uri;
 import android.content.IntentSender;
 
+import java.util.List;
+
 /**
  *  See {@link PackageManager} for documentation on most of the APIs
  *  here.
@@ -75,7 +77,7 @@ interface IPackageManager {
     ProviderInfo getProviderInfo(in ComponentName className, int flags);
 
     int checkPermission(String permName, String pkgName);
-    
+
     int checkUidPermission(String permName, int uid);
 
     boolean addPermission(in PermissionInfo info);
@@ -372,4 +374,14 @@ interface IPackageManager {
     void revokePermissions(String pkgName, in String[] perms);
 
     void setPermissions(String pkgName, in String[] perms);
+
+    boolean passedCommsPolicy(int fromUid, int toUid);
+
+    List<String> getTagsForUid(int uid);
+
+    List<String> getAllTags();
+
+    boolean removeTag(int uid, String tag);
+
+    boolean addTag(int uid, String tag);
 }

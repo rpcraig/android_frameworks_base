@@ -928,6 +928,14 @@ final class Settings {
                 }
                 serializer.endTag(null, "revoked-perms");
 
+                serializer.startTag(null, "tagprop-tags");
+                for (final String tag : usr.tagPropTags) {
+                    serializer.startTag(null, "tag");
+                    serializer.attribute(null, "name", tag);
+                    serializer.endTag(null, "tag");
+                }
+                serializer.endTag(null, "tagprop-tags");
+
                 serializer.endTag(null, "shared-user");
             }
 
@@ -1172,6 +1180,17 @@ final class Settings {
             }
             serializer.endTag(null, "enabled-components");
         }
+
+        serializer.startTag(null, "tagprop-tags");
+        if (pkg.sharedUser == null) {
+            // If this is a shared user, tags will be written in that section.
+            for (final String tag : pkg.tagPropTags) {
+                serializer.startTag(null, "tag");
+                serializer.attribute(null, "name", tag);
+                serializer.endTag(null, "tag");
+            }
+        }
+        serializer.endTag(null, "tagprop-tags");
 
         serializer.endTag(null, "package");
     }
@@ -1737,6 +1756,8 @@ final class Settings {
                     packageSetting.permissionsFixed = true;
                 } else if (tagName.equals("revoked-perms")) {
                     readGrantedPermissionsLPw(parser, packageSetting.revokedPermissions);
+                } else if (tagName.equals("tagprop-tags")) {
+                    readTagPropTagsLPw(parser, packageSetting.tagPropTags);
                 } else {
                     PackageManagerService.reportSettingsProblem(Log.WARN,
                             "Unknown element under <package>: " + parser.getName());
@@ -1855,6 +1876,8 @@ final class Settings {
                     readGrantedPermissionsLPw(parser, su.grantedPermissions);
                 }  else if (tagName.equals("revoked-perms")) {
                     readGrantedPermissionsLPw(parser, su.revokedPermissions);
+                } else if (tagName.equals("tagprop-tags")) {
+                    readTagPropTagsLPw(parser, su.tagPropTags);
                 } else {
                     PackageManagerService.reportSettingsProblem(Log.WARN,
                             "Unknown element under <shared-user>: " + parser.getName());
@@ -1885,6 +1908,35 @@ final class Settings {
                 } else {
                     PackageManagerService.reportSettingsProblem(Log.WARN,
                             "Error in package manager settings: <perms> has" + " no name at "
+                                    + parser.getPositionDescription());
+                }
+            } else {
+                PackageManagerService.reportSettingsProblem(Log.WARN,
+                        "Unknown element under <perms>: " + parser.getName());
+            }
+            XmlUtils.skipCurrentTag(parser);
+        }
+    }
+
+    private void readTagPropTagsLPw(XmlPullParser parser, HashSet<String> tags)
+            throws IOException, XmlPullParserException {
+        int outerDepth = parser.getDepth();
+        int type;
+
+        while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
+                && (type != XmlPullParser.END_TAG || parser.getDepth() > outerDepth)) {
+            if (type == XmlPullParser.END_TAG || type == XmlPullParser.TEXT) {
+                continue;
+            }
+
+            String tagName = parser.getName();
+            if (tagName.equals("tag")) {
+                String name = parser.getAttributeValue(null, "name");
+                if (name != null) {
+                    tags.add(name.intern());
+                } else {
+                    PackageManagerService.reportSettingsProblem(Log.WARN,
+                            "Error in package manager settings: <tags> has" + " no name at "
                                     + parser.getPositionDescription());
                 }
             } else {

@@ -1511,6 +1511,16 @@
     <!-- Description of policy access to revoke permissions of a given uid [CHAR LIMIT=110]-->
     <string name="permdesc_revokePermissions">Allow the revocation of an already granted permissions</string>
 
+    <!-- Title of policy access to get tags [CHAR LIMIT=30] -->
+    <string name="permlab_getTags">Get tags</string>
+    <!-- Description of policy access to get tags of a given uid [CHAR LIMIT=110]-->
+    <string name="permdesc_getTags">Get tags set for a uid</string>
+
+    <!-- Title of policy access to set tags [CHAR LIMIT=30] -->
+    <string name="permlab_setTags">Set tags</string>
+    <!-- Description of policy access to set tags of a given uid [CHAR LIMIT=110]-->
+    <string name="permdesc_setTags">Add or remove tags given to a uid</string>
+
     <!-- Policy administration -->
 
     <!-- Title of policy access to limiting the user's password choices -->

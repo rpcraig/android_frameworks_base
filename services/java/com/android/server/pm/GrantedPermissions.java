@@ -26,8 +26,6 @@ class GrantedPermissions {
     HashSet<String> grantedPermissions = new HashSet<String>();
     HashSet<String> revokedPermissions = new HashSet<String>();
     HashSet<String> effectivePermissions = new HashSet<String>();
-
-    //XXX this tag stuff probably shouldnt be in here
     HashSet<String> tagPropTags = new HashSet<String>();
 
     int[] gids;

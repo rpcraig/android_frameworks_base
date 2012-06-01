@@ -611,6 +611,14 @@ public abstract class PackageManager {
     public static final int INSTALL_FAILED_INTERNAL_ERROR = -110;
 
     /**
+     * Installation failed return code: this is passed to the {@link IPackageInstallObserver} by
+     * {@link #installPackage(android.net.Uri, IPackageInstallObserver, int)}
+     * if the system failed to install the package because of a policy denial.
+     * @hide
+     */
+    public static final int INSTALL_FAILED_POLICY_REJECTED_PERMISSION = -111;
+
+    /**
      * Flag parameter for {@link #deletePackage} to indicate that you don't want to delete the
      * package's data directory.
      *
@@ -2709,4 +2717,33 @@ public abstract class PackageManager {
      */
     public abstract void revokePermissions(String pkgName, String[] perms);
 
+    /**
+     * Returns the tags assigned to a given UID. This call will fail if the
+     * calling context lacks the {@link android.Manifest.permission#GET_TAGS}
+     * permission.
+     * @hide
+     */
+    public abstract List<String> getTagsForUid(int uid);
+
+    /**
+     * Returns all tags created by policy. This call will fail if the calling
+     * context lacks the {@link android.Manifest.permission#GET_TAGS}
+     * permission.
+     * @hide
+     */
+    public abstract List<String> getAllTags();
+
+    /**
+     * Associates a tag to a UID. This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#SET_TAGS} permission.
+     * @hide
+     */
+    public abstract boolean addTag(int uid, String tag);
+
+    /**
+     * Removes a tag from a UID. This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#SET_TAGS} permission.
+     * @hide
+     */
+    public abstract boolean removeTag(int uid, String tag);
 }

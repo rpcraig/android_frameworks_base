@@ -1281,4 +1281,48 @@ final class ApplicationPackageManager extends PackageManager {
             = new HashMap<ResourceName, WeakReference<Drawable.ConstantState>>();
     private static HashMap<ResourceName, WeakReference<CharSequence>> sStringCache
             = new HashMap<ResourceName, WeakReference<CharSequence>>();
+    
+    /** @hide */
+    @Override
+    public List<String> getTagsForUid(int uid) {
+        try {
+            return mPM.getTagsForUid(uid);
+        } catch (RemoteException e) {
+            Log.wtf(TAG, e);
+        }
+        return null;
+    }
+    
+    /**@hide */
+    @Override
+    public List<String> getAllTags() {
+        try {
+            return mPM.getAllTags();
+        } catch (RemoteException e) {
+            Log.wtf(TAG, e);
+        }
+        return null;
+    }
+
+    /** @hide */
+    @Override
+    public boolean addTag(int uid, String tag) {
+        try {
+            return mPM.addTag(uid, tag);
+        } catch (RemoteException e) {
+            Log.wtf(TAG, e);
+        }
+        return false;
+    }
+
+    /** @hide */
+    @Override
+    public boolean removeTag(int uid, String tag) {
+        try {
+            return mPM.removeTag(uid, tag);
+        } catch (RemoteException e) {
+            Log.wtf(TAG, e);
+        }
+        return false;
+    }
 }

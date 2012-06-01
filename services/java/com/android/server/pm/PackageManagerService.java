@@ -5024,16 +5024,19 @@ public class PackageManagerService extends IPackageManager.Stub {
             if (p != null && p.mExtras != null) {
                 final PackageSetting ps = (PackageSetting)p.mExtras;
                 final GrantedPermissions gp = ps.sharedUser == null ? ps : ps.sharedUser;
-                for (String perm : perms) {
-                    // only allow revoked perms of the original granted set
-                    if (gp.grantedPermissions.contains(perm)) {
-                        gp.revokedPermissions.add(perm);
-                        final BasePermission bp = mSettings.mPermissions.get(perm);
-                        gp.revokedGids = appendInts(gp.revokedGids, bp.gids);
+                // system uid permissions are basically exempt anyways so ignore them
+                if (p.applicationInfo.uid != Process.SYSTEM_UID) {
+                    for (String perm : perms) {
+                        // only allow revoked perms of the original granted set
+                        if (gp.grantedPermissions.contains(perm)) {
+                            gp.revokedPermissions.add(perm);
+                            final BasePermission bp = mSettings.mPermissions.get(perm);
+                            gp.revokedGids = appendInts(gp.revokedGids, bp.gids);
+                        }
                     }
+                    updateEffectivePermissions(gp);
+                    mSettings.writeLPr();
                 }
-                updateEffectivePermissions(gp);
-                mSettings.writeLPr();
             }
         }
     }
@@ -5047,17 +5050,19 @@ public class PackageManagerService extends IPackageManager.Stub {
             if (p != null && p.mExtras != null) {
                 final PackageSetting ps = (PackageSetting)p.mExtras;
                 final GrantedPermissions gp = ps.sharedUser == null ? ps : ps.sharedUser;
-                for (String perm : perms) {
-                    // only allow a permission to be set that was previously revoked
-                    if (gp.revokedPermissions.remove(perm)) {
-                        final BasePermission bp = mSettings.mPermissions.get(perm);
-                        gp.revokedGids = removeInts(gp.revokedGids, bp.gids);
-                    } else {
-                        Log.d(TAG, "Can't set permission " + perm + " for package " + pkgName);
+                if (p.applicationInfo.uid != Process.SYSTEM_UID) {
+                    for (String perm : perms) {
+                        // only allow a permission to be set that was previously revoked
+                        if (gp.revokedPermissions.remove(perm)) {
+                            final BasePermission bp = mSettings.mPermissions.get(perm);
+                            gp.revokedGids = removeInts(gp.revokedGids, bp.gids);
+                        } else {
+                            Log.d(TAG, "Can't set permission " + perm + " for package " + pkgName);
+                        }
                     }
+                    updateEffectivePermissions(gp);
+                    mSettings.writeLPr();
                 }
-                updateEffectivePermissions(gp);
-                mSettings.writeLPr();
             }
         }
     }

@@ -95,6 +95,7 @@ import android.os.ServiceManager;
 import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.security.SystemKeyStore;
+import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.EventLog;
 import android.util.Log;
@@ -133,6 +134,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -154,10 +156,13 @@ adb shell am instrument -w -e class com.android.unit_tests.PackageManagerTests c
  */
 public class PackageManagerService extends IPackageManager.Stub {
     static final String TAG = "PackageManager";
+    private static final String MMAC_DENY = "MMAC_DENIAL:";
     static final boolean DEBUG_SETTINGS = false;
     private static final boolean DEBUG_PREFERRED = false;
     static final boolean DEBUG_UPGRADE = false;
     private static final boolean DEBUG_INSTALL = false;
+    private static final boolean DEBUG_POLICY = true;
+    private static final boolean DEBUG_POLICY_INSTALL = DEBUG_POLICY || false;
     private static final boolean DEBUG_REMOVE = false;
     private static final boolean DEBUG_SHOW_INFO = false;
     private static final boolean DEBUG_PACKAGE_INFO = false;
@@ -317,9 +322,15 @@ public class PackageManagerService extends IPackageManager.Stub {
     // Temporary for building the final shared libraries for an .apk.
     String[] mTmpSharedLibraries = null;
 
-    // Available policy read from mac_permissions.xml
-    private HashMap<String, HashSet<String>> mInstallPermissionPolicy =
-        new HashMap<String, HashSet<String>>();
+    // Available policy read from mac_permissions.xml that deals
+    // with global signature based stanzas, including any default stanza.
+    private HashMap<Signature, InstallPolicy> mInstallSignaturePolicy =
+            new HashMap<Signature, InstallPolicy>();
+
+    // Available policy read from mac_permissions.xml that deals
+    // with global package stanzas.
+    private HashMap<String, InstallPolicy> mInstallPackagePolicy =
+            new HashMap<String, InstallPolicy>();
 
     // Has the mac_permissions.xml been found
     private final boolean isMacPolicyEnabled;
@@ -1056,8 +1067,12 @@ public class PackageManagerService extends IPackageManager.Stub {
                 }
             }
 
-            // Find policy
+            // Find install policy
+            long startPolicyTime = SystemClock.uptimeMillis();
             isMacPolicyEnabled = scanPolicy();
+            Slog.i(TAG, "Time to scan install policy: "
+                   + ((SystemClock.uptimeMillis()-startPolicyTime)/1000f)
+                   + " seconds");
 
             // Find base frameworks (resource packages without code).
             mFrameworkInstallObserver = new AppDirObserver(
@@ -1268,7 +1283,7 @@ public class PackageManagerService extends IPackageManager.Stub {
         }
 
         if (policyFile == null) {
-            Slog.d(TAG, "No mac_permissions.xml policy file found. Starting in disabled mode.");
+            Slog.d(TAG, "No mac_permissions.xml policy file. MMAC starting in disabled mode.");
             return false;
         }
 
@@ -1289,40 +1304,128 @@ public class PackageManagerService extends IPackageManager.Stub {
                 if (parser.getEventType() == XmlPullParser.END_DOCUMENT) {
                     break;
                 }
-                String name = parser.getName();
-                if ("install-permission".equals(name)) {
-                    String packageName = parser.getAttributeValue(null, "package-name");
-                    if (packageName == null) {
-                        Slog.d(TAG, "<install-permission> without package-name at "
-                               + parser.getPositionDescription() + " in mac_permissions.xml");
+                String tagName = parser.getName();
+                if ("signer".equals(tagName)) {
+                    String cert = parser.getAttributeValue(null, "signature");
+                    if (cert != null && !cert.equals("")) {
+                        Signature signature = null;
+                        try {
+                            signature = new Signature(cert);
+                        } catch (IllegalArgumentException e) {
+                            Slog.w(TAG, "'signer' tag with bad signature at " +
+                                   parser.getPositionDescription() + ": " + e);
+                            XmlUtils.skipCurrentTag(parser);
+                            continue;
+                        }
+                        if (signature != null) {
+                            InstallPolicy type = determineInstallPolicyType(parser, true);
+                            if (type != null) {
+                                mInstallSignaturePolicy.put(signature, type);
+                                if (DEBUG_POLICY_INSTALL)
+                                    Log.i(TAG, "<signer>: (" + cert + ") " + type);
+                            } else {
+                                Slog.w(TAG, "Skipping policy stanza format for 'signer' at " +
+                                       parser.getPositionDescription());
+                            }
+                        }
                     } else {
-                        readInstallPermissionPolicy(parser, packageName);
+                        Slog.w(TAG, "<signer> without valid signature attribute at "
+                               + parser.getPositionDescription() + ". Skipping tag.");
+                        XmlUtils.skipCurrentTag(parser);
+                        continue;
+                    }
+                } else if ("default".equals(tagName)) {
+                    InstallPolicy type = determineInstallPolicyType(parser, true);
+                    if (type != null) {
+                        // we use the null key in the hashset as the 'default' type
+                        mInstallSignaturePolicy.put(null, type);
+                        if (DEBUG_POLICY_INSTALL)
+                            Log.i(TAG, "<default>: " + type);
+                    } else {
+                        Slog.w(TAG, "Skipping policy stanza format for 'default' at " +
+                               parser.getPositionDescription());
+                    }
+                } else if ("package".equals(tagName)) {
+                    String pkgName = parser.getAttributeValue(null, "name");
+                    if (pkgName != null) {
+                        InstallPolicy type = determineInstallPolicyType(parser, false);
+                        if (type != null) {
+                            mInstallPackagePolicy.put(pkgName, type);
+                            if (DEBUG_POLICY_INSTALL)
+                                Log.i(TAG, "<package>: (" + pkgName + ") " + type);
+                        } else {
+                            Slog.w(TAG, "Skipping policy stanza format for 'package' at " +
+                                   parser.getPositionDescription());
+                        }
+                    } else {
+                        Slog.w(TAG, "<package> without valid name attribute at "
+                               + parser.getPositionDescription() + ". Skipping tag.");
+                        XmlUtils.skipCurrentTag(parser);
+                        continue;
                     }
                 } else {
-                    Slog.i(TAG, "Got unknown XML element in mac_permissions.xml: <"+name+">");
+                    Slog.w(TAG, "Skipping unknown XML element: <"+tagName+"> at " +
+                           parser.getPositionDescription());
                     XmlUtils.skipCurrentTag(parser);
                     continue;
                 }
             }
             policyFile.close();
         } catch (XmlPullParserException e) {
+            // how to handle the extreme cases....most likely kill all policy
+            // but what if a policy is not already in place..
             Slog.w(TAG, "Got execption parsing permissions for mac_permissions.xml." + e);
         } catch (IOException e) {
+            // how to handle the extreme cases....
             Slog.w(TAG, "Got execption parsing permissions for mac_permissions.xml." + e);
         }
         return true;
     }
 
-    void readInstallPermissionPolicy(XmlPullParser parser, String packageName)
+    /**
+     * Takes an install policy stanza and determines the type of policy enforced.
+     * The rules are as follows:
+     * - A blacklist is determined if at least one <deny-permission name="" /> tag
+     *     is found. Zero or more tags are allowed.
+     * - A whitelist is determined if not a blacklist and at least one
+     *     <allow-permission name="" /> tag is found. Zero or more are allowed.
+     * - A wildcard is assigned if no whitelist and no blacklist and at least
+     *     one <allow-all /> tag is found. Zero or more are allowed.
+     * - Zero or more <package name="" > sub elements are allowed. The scope
+     *     of the enforcement for the package is determined by the location of
+     *     the particular package tag. If found outside of a signer or default tag,
+     *     then the package tag has global scope. If found within a signer or default
+     *     tag then it has signatue scope. Meaning, all packages signed with the parent
+     *     cert are mediated within the enclosed package policy stanza.
+     * - In order for a policy stanza to be applied, at least one of the above
+     *     situations must apply. If none of the above cases apply then no policy
+     *     is created for this stanza.
+     * - Strict enforcing of the xml stanza is not enforced in most cases.
+     *     This mainly applies to duplicate tags which are allowed. In the event
+     *     that a tag already exists, the original tag is replaced.
+     * - There are also no checks on the validity of permission names. Although
+     *     valid android permissions are expected, nothing prevents unknowns.
+     * @param XmlPullParser object which points to a valid xml policy tree instance.
+     * @param notInsidePackageTag a boolean representing that we have not already
+     *        recursed inside a <package name=""> sub element. This is in
+     *        place to prevent the <package name="" > tag appearing inside itself.
+     *        at any level.
+     * @return InstallPolicy an InstallPolicy class representing the type
+     *          of policy that was assigned to the stanza. A null value
+     *          can result which indicates no type could be determined.
+     */
+    InstallPolicy determineInstallPolicyType(XmlPullParser parser, boolean notInsidePackageTag)
         throws IOException, XmlPullParserException {
 
-        HashSet<String> allowedPerms = new HashSet<String>();
+        final HashSet<String> allowPolicyPerms = new HashSet<String>();
+        final HashSet<String> denyPolicyPerms = new HashSet<String>();
 
-        // clear out the old
-        mInstallPermissionPolicy.clear();
+        final HashMap<String, InstallPolicy> packagePolicy =
+            new HashMap<String, InstallPolicy>();
 
-        int outerDepth = parser.getDepth();
         int type;
+        int outerDepth = parser.getDepth();
+        boolean allowAll = false;
         while ((type=parser.next()) != XmlPullParser.END_DOCUMENT
                && (type != XmlPullParser.END_TAG
                    || parser.getDepth() > outerDepth)) {
@@ -1332,22 +1435,171 @@ public class PackageManagerService extends IPackageManager.Stub {
             }
 
             String tagName = parser.getName();
-            if ("allowed-permission".equals(tagName)) {
+            if ("allow-permission".equals(tagName)) {
                 String permName = parser.getAttributeValue(null, "name");
                 if (permName != null) {
-                    allowedPerms.add(permName);
+                    allowPolicyPerms.add(permName);
                 } else {
-                    Slog.d(TAG, "<allowed-permission> without name at "
-                           + parser.getPositionDescription());
+                    Slog.w(TAG, "<allow-permission> without valid name attribute at "
+                           + parser.getPositionDescription() + ". Skipping tag.");
                 }
-
                 XmlUtils.skipCurrentTag(parser);
+                continue;
+            } else if ("deny-permission".equals(tagName)) {
+                String permName = parser.getAttributeValue(null, "name");
+                if (permName != null) {
+                    denyPolicyPerms.add(permName);
+                } else {
+                    Slog.w(TAG, "<deny-permission> without valid name attribute at "
+                           + parser.getPositionDescription() + ". Skipping tag.");
+                }
+                XmlUtils.skipCurrentTag(parser);
+                continue;
+            } else if ("allow-all".equals(tagName)) {
+                allowAll = true;
+                // skip tag....
+            } else if (notInsidePackageTag && "package".equals(tagName)) {
+                String pkgName = parser.getAttributeValue(null, "name");
+                if (pkgName != null) {
+                    InstallPolicy packageType = determineInstallPolicyType(parser, false);
+                    if (packageType != null) {
+                        packagePolicy.put(pkgName, packageType);
+                        if (DEBUG_POLICY_INSTALL)
+                            Log.i(TAG, "<package>: (" + pkgName + ") " + packageType);
+                    } else {
+                        Slog.w(TAG, "Skipping policy stanza format for 'package' at " +
+                               parser.getPositionDescription());
+                    }
+                } else {
+                    Slog.w(TAG, "<package> without valid name attribute at "
+                           + parser.getPositionDescription() + ". Skipping tag.");
+                    XmlUtils.skipCurrentTag(parser);
+                    continue;
+                }
+            } else {
+                Slog.w(TAG, "Skipping unknown XML element: <"+tagName+"> at " +
+                       parser.getPositionDescription());
+                XmlUtils.skipCurrentTag(parser);
+                continue;
             }
-
         }
 
-        if (allowedPerms.size() > 0)
-            mInstallPermissionPolicy.put(packageName, allowedPerms);
+        // Order is important. Provide the least amount of privelage when in doubt. 
+        InstallPolicy permPolicyType = null;
+        if (denyPolicyPerms.size() > 0)
+            permPolicyType = new BlackListPolicy(denyPolicyPerms, packagePolicy);
+        else if (allowPolicyPerms.size() > 0)
+            permPolicyType = new WhiteListPolicy(allowPolicyPerms, packagePolicy);
+        else if (allowAll)
+            permPolicyType = new InstallPolicy(null, packagePolicy);
+
+        /**
+         * If we only have <package name="" > sub elements we are skipping that policy
+         * stanza for now. Meaning, a signer or default tag with only package sub
+         * elements is ignored.
+         */
+
+        return permPolicyType;
+    }
+
+    /**
+     * Base class for all install policy classes.
+     * Also doubles as the wildcard (allow everything) policy.
+     */
+    public class InstallPolicy {
+
+        final HashSet<String> policyPerms;
+        final HashMap<String, InstallPolicy> packagePolicy;
+
+        InstallPolicy(HashSet<String> policyPerms, HashMap<String, InstallPolicy> packagePolicy) {
+            this.policyPerms = policyPerms;
+            this.packagePolicy = packagePolicy;
+        }
+
+        public boolean passedPolicyChecks(PackageParser.Package pkg) {
+            // ensure that local package policy takes precedence
+            if (packagePolicy.containsKey(pkg.packageName))
+                return packagePolicy.get(pkg.packageName).passedPolicyChecks(pkg);
+
+            return true;
+        }
+
+        public String toString() {
+            StringBuilder out = new StringBuilder();
+            out.append("[");
+            if (policyPerms != null) {
+                out.append(TextUtils.join(",", new TreeSet<String>(policyPerms)));
+            } else {
+                out.append("allow-all");
+            }
+            out.append("]");
+            return out.toString();
+        }
+    }
+
+    /**
+     * Whitelist policy class. Checks that the set of requested permissions
+     * is a subset of the maximal set of allowable permissions.
+     */
+    public class WhiteListPolicy extends InstallPolicy {
+
+        WhiteListPolicy(HashSet<String> policyPerms, HashMap<String, InstallPolicy> packagePolicy) {
+            super(policyPerms, packagePolicy);
+        }
+
+        @Override
+        public boolean passedPolicyChecks(PackageParser.Package pkg) {
+            // ensure that local package policy takes precedence
+            if (packagePolicy.containsKey(pkg.packageName))
+                return packagePolicy.get(pkg.packageName).passedPolicyChecks(pkg);
+
+            if (!policyPerms.containsAll(pkg.requestedPermissions)) {
+                Slog.w(TAG, MMAC_DENY + " Policy whitelist rejected package "
+                       + pkg.packageName + ". The maximal set is: " + toString());
+                return false;
+            }
+
+            return true;
+        }
+
+        @Override
+        public String toString() {
+            return "allowed-permissions => " + super.toString();
+        }
+    }
+
+    /**
+     * Blacklist policy class. Ensures that all requested permissions
+     * are not on the denied list of permissions.
+     */
+    public class BlackListPolicy extends InstallPolicy {
+
+        BlackListPolicy(HashSet<String> policyPerms, HashMap<String, InstallPolicy> packagePolicy) {
+            super(policyPerms, packagePolicy);
+        }
+
+        @Override
+        public boolean passedPolicyChecks(PackageParser.Package pkg) {
+            // ensure that local package policy takes precedence
+            if (packagePolicy.containsKey(pkg.packageName))
+                return packagePolicy.get(pkg.packageName).passedPolicyChecks(pkg);
+
+            Iterator itr = pkg.requestedPermissions.iterator();
+            while (itr.hasNext()) {
+                String perm = (String)itr.next();
+                if (policyPerms.contains(perm)) {
+                    Slog.w(TAG, MMAC_DENY + " Policy blacklisted permission " + perm +
+                           " for package " + pkg.packageName);
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public String toString() {
+            return "denied-permissions => " + super.toString();
+        }
     }
 
     void readPermissions() {
@@ -3241,28 +3493,54 @@ public class PackageManagerService extends IPackageManager.Stub {
         }
     }
 
-    private String buildInstallMACStanza(String packageName, ArrayList<String> permissions) {
-        XmlSerializer xmlSerializer = Xml.newSerializer();
-        StringWriter writer = new StringWriter();
+    private boolean passInstallPolicyChecks(PackageParser.Package pkg) {
 
-        try {
-            xmlSerializer.setOutput(writer);
-            // open tag: <install-permission>
-            xmlSerializer.startTag("", "install-permission");
-            xmlSerializer.attribute("", "package-name", packageName);
-            for (Iterator i = permissions.iterator(); i.hasNext();) {
-                // tag: <allowed-permission>
-                xmlSerializer.startTag("", "allowed-permission");
-                xmlSerializer.attribute("", "name", (String)i.next());
-                xmlSerializer.endTag("", "allowed-permission");
-            }
-            // end tag: <install-permission>
-            xmlSerializer.endTag("", "install-permission");
-            xmlSerializer.endDocument();
-        } catch (Exception e) {
-            Slog.e(TAG, "Error occurred while creating install permission stanza." + e);
+        if (pkg.requestedPermissions.isEmpty()) {
+            return true;
         }
-        return writer.toString();
+
+        /**
+         * Order of policy checks:
+         *     valid X.509 cert policy with per-package specified
+         *     valid X.509 cert policy with global check
+         *       the per-package and global checks on X.509 certs happen
+         *       transparently with the call to passedPolicyChecks(pkg)
+         *     global per-package check
+         *     default check (null signature)
+         */
+
+        // APKs can have mulitple signatures. We just want one that passes.
+        for (Signature s : pkg.mSignatures) {
+            if (s == null) {
+                continue;
+            }
+
+            /**
+             * First check for a valid policy based on a non default signature. 
+             * The 'default' will be checked last.
+             */
+            if (mInstallSignaturePolicy.containsKey(s)) {
+                if (mInstallSignaturePolicy.get(s).passedPolicyChecks(pkg)) {
+                    return true;
+                }
+            }
+        }
+
+        // note: if an app signature has been found in policy yet the signer
+        // stanza check has failed, we still proceed to the next set of checks.
+
+        // check for global per-package policy
+        if (mInstallPackagePolicy.containsKey(pkg.packageName)) {
+            return mInstallPackagePolicy.get(pkg.packageName).passedPolicyChecks(pkg);
+        }
+
+        // Check for 'default' policy
+        if (mInstallSignaturePolicy.containsKey(null)) {
+            return mInstallSignaturePolicy.get(null).passedPolicyChecks(pkg);
+        }
+
+        // If we get here it's because this package had no policy
+        return false;
     }
 
     private PackageParser.Package scanPackageLI(PackageParser.Package pkg,
@@ -3277,25 +3555,14 @@ public class PackageManagerService extends IPackageManager.Stub {
         }
         mScanningPath = scanFile;
 
-        // Verify requested permissions are allowed by policy, exempt system apps though
-        if (isMacPolicyEnabled && (parseFlags & PackageParser.PARSE_IS_SYSTEM) == 0 &&
-            !pkg.requestedPermissions.isEmpty()) {
-
-            HashSet<String> installPolicy = mInstallPermissionPolicy.get(pkg.packageName);
-
-            for (Iterator i = pkg.requestedPermissions.iterator(); i.hasNext();) {
-                String perm = (String)i.next();
-                if (installPolicy == null || !installPolicy.contains(perm)) {
-                    Slog.d(TAG, "Policy denied for package '" + pkg.packageName + "'");
-                    String stanza = buildInstallMACStanza(pkg.packageName, pkg.requestedPermissions);
-                    Slog.d(TAG, stanza);
-                    if (SystemProperties.getBoolean("persist.mac_enforcing_mode", false)) {
-                        mLastScanError = PackageManager.INSTALL_FAILED_POLICY_REJECTED_PERMISSION;
-                        return null;
-                    }
-                    break;
-                }
-            }
+        // Verify requested permissions are allowed by policy.
+        // Should we move this check after granted permissions are resolved...
+        if (isMacPolicyEnabled && !passInstallPolicyChecks(pkg) &&
+                SystemProperties.getBoolean("persist.mac_enforcing_mode", false)) {
+            Slog.w(TAG, "Installing application package " + pkg.packageName
+                   + " failed due to policy.");
+            mLastScanError = PackageManager.INSTALL_FAILED_POLICY_REJECTED_PERMISSION;
+            return null;
         }
 
         if ((parseFlags&PackageParser.PARSE_IS_SYSTEM) != 0) {

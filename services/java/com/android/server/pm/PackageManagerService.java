@@ -321,6 +321,9 @@ public class PackageManagerService extends IPackageManager.Stub {
     // Available policy read from mac_permissions.xml
     private HashMap<String, HashSet<String>> mInstallPermissionPolicy =
         new HashMap<String, HashSet<String>>();
+    // Available policy read from revoke_permissions.xml
+    private HashMap<String, HashSet<String>> mRevokePermissionPolicy =
+        new HashMap<String, HashSet<String>>();
 
     // Has the mac_permissions.xml been found
     private final boolean isMacPolicyEnabled;
@@ -1071,6 +1074,7 @@ public class PackageManagerService extends IPackageManager.Stub {
 
             // Find policy
             isMacPolicyEnabled = scanPolicy();
+            scanRevokePolicy();
 
             // Find base frameworks (resource packages without code).
             mFrameworkInstallObserver = new AppDirObserver(
@@ -1170,6 +1174,8 @@ public class PackageManagerService extends IPackageManager.Stub {
             // can downgrade to reader
             mSettings.writeLPr();
 
+            revokePolicyPermissionsLPw();
+
             EventLog.writeEvent(EventLogTags.BOOT_PROGRESS_PMS_READY,
                     SystemClock.uptimeMillis());
 
@@ -1257,6 +1263,101 @@ public class PackageManagerService extends IPackageManager.Stub {
             }
         }
         mSettings.removePackageLPw(ps.name);
+    }
+
+    boolean scanRevokePolicy() {
+        File dataDir = Environment.getDataDirectory();
+        File rootDir = Environment.getRootDirectory();
+
+        File[] policyFileLocations = new File[]{
+            new File(dataDir, "system/revoke_permissions.xml"),
+            new File(rootDir, "etc/security/revoke_permissions.xml"),
+            null};
+
+        FileReader policyFile = null;
+        int i = 0;
+        while (policyFile == null && policyFileLocations[i] != null) {
+            try {
+                policyFile = new FileReader(policyFileLocations[i]);
+                break;
+            } catch (FileNotFoundException e) {
+                Slog.d(TAG,"Couldn't find revoke permissions file " + policyFileLocations[i]);
+            }
+            i++;
+        }
+
+        if (policyFile == null) {
+            Slog.d(TAG, "No middleware revocation policy found.");
+            return false;
+        }
+
+        Slog.d(TAG, "Middleware revocation policy found.");
+
+        try {
+            XmlPullParser parser = Xml.newPullParser();
+            parser.setInput(policyFile);
+
+            XmlUtils.beginDocument(parser, "revoke-policy");
+
+            while (true) {
+                XmlUtils.nextElement(parser);
+                if (parser.getEventType() == XmlPullParser.END_DOCUMENT) {
+                    break;
+                }
+                String name = parser.getName();
+                if ("package".equals(name)) {
+                    String packageName = parser.getAttributeValue(null, "name");
+                    if (packageName == null) {
+                        Slog.d(TAG, "<package> without name at "
+                               + parser.getPositionDescription() + " in revoke_permissions.xml");
+                    } else {
+                        readRevokePolicy(parser, packageName);
+                    }
+                } else {
+                    Slog.i(TAG, "Got unknown XML element in revoke_permissions.xml: <"+name+">");
+                    XmlUtils.skipCurrentTag(parser);
+                    continue;
+                }
+            }
+            policyFile.close();
+        } catch (XmlPullParserException e) {
+            Slog.w(TAG, "Got execption parsing permissions for revoke_permissions.xml." + e);
+        } catch (IOException e) {
+            Slog.w(TAG, "Got execption parsing permissions for revoke_permissions.xml." + e);
+        }
+        return true;
+    }
+
+    void readRevokePolicy(XmlPullParser parser, String packageName)
+        throws IOException, XmlPullParserException {
+
+        HashSet<String> revokedPerms = new HashSet<String>();
+
+        int outerDepth = parser.getDepth();
+        int type;
+        while ((type=parser.next()) != XmlPullParser.END_DOCUMENT
+               && (type != XmlPullParser.END_TAG
+                   || parser.getDepth() > outerDepth)) {
+            if (type == XmlPullParser.END_TAG
+                || type == XmlPullParser.TEXT) {
+                continue;
+            }
+
+            String tagName = parser.getName();
+            if ("revoke-permission".equals(tagName)) {
+                String permName = parser.getAttributeValue(null, "name");
+                if (permName != null) {
+                    revokedPerms.add(permName);
+                } else {
+                    Slog.d(TAG, "<revoke-permission> without name at "
+                           + parser.getPositionDescription());
+                }
+                XmlUtils.skipCurrentTag(parser);
+            }
+        }
+
+        if (revokedPerms.size() > 0)
+            mRevokePermissionPolicy.put(packageName, revokedPerms);
     }
 
     boolean scanPolicy() {
@@ -5359,64 +5460,81 @@ public class PackageManagerService extends IPackageManager.Stub {
     public String[] getGrantedPermissions(final String pkgName) {
         mContext.enforceCallingOrSelfPermission(
                 android.Manifest.permission.GET_PERMISSIONS, null);
-
-        String result[] = null;
         synchronized (mPackages) {
-            final PackageParser.Package p = mPackages.get(pkgName);
-            if (p != null && p.mExtras != null) {
-                final PackageSetting ps = (PackageSetting)p.mExtras;
-                if (ps.sharedUser != null) {
-                    result = new String[ps.sharedUser.grantedPermissions.size()];
-                    ps.sharedUser.grantedPermissions.toArray(result);
-                } else {
-                    result = new String[ps.grantedPermissions.size()];
-                    ps.grantedPermissions.toArray(result);
-                }
-            }
+            return getPermissionsLPw(pkgName, "granted");
         }
-        return result;
     }
 
     public String[] getRevokedPermissions(final String pkgName) {
         mContext.enforceCallingOrSelfPermission(
                 android.Manifest.permission.GET_PERMISSIONS, null);
-
-        String[] result = null;
         synchronized (mPackages) {
-            final PackageParser.Package p = mPackages.get(pkgName);
-            if (p != null && p.mExtras != null) {
-                final PackageSetting ps = (PackageSetting)p.mExtras;
-                if (ps.sharedUser != null) {
-                    result = new String[ps.sharedUser.revokedPermissions.size()];
-                    ps.sharedUser.revokedPermissions.toArray(result);
-                } else {
-                    result = new String[ps.revokedPermissions.size()];
-                    ps.revokedPermissions.toArray(result);
-                }
-            }
+            return getPermissionsLPw(pkgName, "revoked");
         }
-        return result;
     }
 
     public void revokePermissions(final String pkgName, final String[] perms) {
         mContext.enforceCallingOrSelfPermission(
                 android.Manifest.permission.REVOKE_PERMISSIONS, null);
-
         synchronized (mPackages) {
-            final PackageParser.Package p = mPackages.get(pkgName);
-            if (p != null && p.mExtras != null) {
-                final PackageSetting ps = (PackageSetting)p.mExtras;
-                final GrantedPermissions gp = ps.sharedUser == null ? ps : ps.sharedUser;
-                // system uid permissions are basically exempt anyways so ignore them
-                if (p.applicationInfo.uid != Process.SYSTEM_UID) {
-                    for (String perm : perms) {
-                        // only allow revoked perms of the original granted set
-                        if (gp.grantedPermissions.contains(perm)) {
-                            gp.revokedPermissions.add(perm);
-                            final BasePermission bp = mSettings.mPermissions.get(perm);
-                            gp.revokedGids = appendInts(gp.revokedGids, bp.gids);
-                        }
+            revokePermissionsLPw(pkgName, perms);
+        }
+    }
+
+    public void setPermissions(final String pkgName, final String[] perms) {
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.SET_PERMISSIONS, null);
+        synchronized (mPackages) {
+            setPermissionsLPw(pkgName, perms);
+        }
+    }
+
+    private void revokePolicyPermissionsLPw() {
+        for (Iterator i = mRevokePermissionPolicy.entrySet().iterator(); i.hasNext();) {
+            Map.Entry pairs = (Map.Entry)i.next();
+            String pkgName = (String)pairs.getKey();
+            HashSet<String> perms = (HashSet<String>)pairs.getValue();
+            revokePermissionsLPw(pkgName, perms.toArray(new String[0]));
+        }
+    }
+
+    private String[] getPermissionsLPw(final String pkgName, String type) {
+
+        String result[] = null;
+        final PackageParser.Package p = mPackages.get(pkgName);
+        if (p != null && p.mExtras != null) {
+            final PackageSetting ps = (PackageSetting)p.mExtras;
+            final GrantedPermissions gp = ps.sharedUser != null ? ps.sharedUser : ps;
+            if (type.equals("granted")) {
+                result = new String[gp.grantedPermissions.size()];
+                gp.grantedPermissions.toArray(result);
+            } else if (type.equals("revoked")) {
+                result = new String[gp.revokedPermissions.size()];
+                gp.revokedPermissions.toArray(result);
+            }
+        }
+        return result;
+    }
+
+    private void revokePermissionsLPw(final String pkgName, final String[] perms) {
+
+        final PackageParser.Package p = mPackages.get(pkgName);
+        if (p != null && p.mExtras != null && perms != null) {
+            final PackageSetting ps = (PackageSetting)p.mExtras;
+            final GrantedPermissions gp = ps.sharedUser != null ? ps.sharedUser : ps;
+            // system uid permissions are basically exempt anyways so ignore them
+            if (p.applicationInfo.uid != Process.SYSTEM_UID) {
+                boolean permChange = false;
+                for (String perm : perms) {
+                    // only allow revoked perms of the original granted set
+                    if (gp.grantedPermissions.contains(perm)) {
+                        gp.revokedPermissions.add(perm);
+                        final BasePermission bp = mSettings.mPermissions.get(perm);
+                        gp.revokedGids = appendInts(gp.revokedGids, bp.gids);
+                        permChange = true;
                     }
+                }
+                if (permChange) {
                     updateEffectivePermissions(gp);
                     mSettings.writeLPr();
                 }
@@ -5424,25 +5542,25 @@ public class PackageManagerService extends IPackageManager.Stub {
         }
     }
 
-    public void setPermissions(final String pkgName, final String[] perms) {
-        mContext.enforceCallingOrSelfPermission(
-                android.Manifest.permission.SET_PERMISSIONS, null);
+    private void setPermissionsLPw(final String pkgName, final String[] perms) {
 
-        synchronized (mPackages) {
-            final PackageParser.Package p = mPackages.get(pkgName);
-            if (p != null && p.mExtras != null) {
-                final PackageSetting ps = (PackageSetting)p.mExtras;
-                final GrantedPermissions gp = ps.sharedUser == null ? ps : ps.sharedUser;
-                if (p.applicationInfo.uid != Process.SYSTEM_UID) {
-                    for (String perm : perms) {
-                        // only allow a permission to be set that was previously revoked
-                        if (gp.revokedPermissions.remove(perm)) {
-                            final BasePermission bp = mSettings.mPermissions.get(perm);
-                            gp.revokedGids = removeInts(gp.revokedGids, bp.gids);
-                        } else {
-                            Log.d(TAG, "Can't set permission " + perm + " for package " + pkgName);
-                        }
+        final PackageParser.Package p = mPackages.get(pkgName);
+        if (p != null && p.mExtras != null && perms != null) {
+            final PackageSetting ps = (PackageSetting)p.mExtras;
+            final GrantedPermissions gp = ps.sharedUser != null ? ps.sharedUser : ps;
+            if (p.applicationInfo.uid != Process.SYSTEM_UID) {
+                boolean permChange = false;
+                for (String perm : perms) {
+                    // only allow a permission to be set that was previously revoked
+                    if (gp.revokedPermissions.remove(perm)) {
+                        final BasePermission bp = mSettings.mPermissions.get(perm);
+                        gp.revokedGids = removeInts(gp.revokedGids, bp.gids);
+                        permChange = true;
+                    } else {
+                        Log.d(TAG, "Can't set permission " + perm + " for package " + pkgName);
                     }
+                }
+                if (permChange) {
                     updateEffectivePermissions(gp);
                     mSettings.writeLPr();
                 }

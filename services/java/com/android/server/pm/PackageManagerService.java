@@ -1478,7 +1478,7 @@ public class PackageManagerService extends IPackageManager.Stub {
                         XmlUtils.skipCurrentTag(parser);
                         continue;
                     }
-                } else if ("tagprop".equalsIgnoreCase(name)) {
+                } else if ("tagprop".equalsIgnoreCase(tagName)) {
                     readTagProp(parser);
                     
                 } else {

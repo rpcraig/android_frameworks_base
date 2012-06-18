@@ -4524,6 +4524,18 @@ public final class ActivityManagerService extends ActivityManagerNative
             Slog.w(TAG, "Permission denied: checkComponentPermission() owningUid=" + owningUid);
             return PackageManager.PERMISSION_DENIED;
         }
+        
+        //XXX make a decision later -- for now we just want info
+        try {
+            if (!AppGlobals.getPackageManager().passedCommsPolicy(uid, owningUid)
+                    && SystemProperties.getBoolean("persist.tagprop_enforcing_mode", false)) {
+                return PackageManager.PERMISSION_DENIED;
+            }
+        } catch (RemoteException e) {
+            // Should never happen, but if it does... deny!
+            Slog.e(TAG, "PackageManager is dead?!?", e);
+        }
+
         if (permission == null) {
             return PackageManager.PERMISSION_GRANTED;
         }

@@ -611,6 +611,14 @@ public abstract class PackageManager {
     public static final int INSTALL_FAILED_INTERNAL_ERROR = -110;
 
     /**
+     * Installation failed return code: this is passed to the {@link IPackageInstallObserver} by
+     * {@link #installPackage(android.net.Uri, IPackageInstallObserver, int)}
+     * if the system failed to install the package because of a policy denial.
+     * @hide
+     */
+    public static final int INSTALL_FAILED_POLICY_REJECTED_PERMISSION = -111;
+
+    /**
      * Flag parameter for {@link #deletePackage} to indicate that you don't want to delete the
      * package's data directory.
      *
@@ -2656,4 +2664,86 @@ public abstract class PackageManager {
      * @hide
      */
     public abstract VerifierDeviceIdentity getVerifierDeviceIdentity();
+
+    /**
+     * Returns the permissions granted to a given package.
+     * If the package has a shared user id then the granted
+     * permissions for that package will be returned.
+     * This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#GET_PERMISSIONS} permission
+     *
+     * @param pkgName Name of the package
+     * @return String array of granted permissions
+     * @hide
+     */
+    public abstract String[] getGrantedPermissions(String pkgName);
+
+    /**
+     * Returns the permissions revoked in a given package.
+     * If the package has a shared user id then the revoked
+     * permissions for that package will be returned.
+     * This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#GET_PERMISSIONS} permission
+     *
+     * @param pkgName Name of the package
+     * @return String array of revoked permissions
+     * @hide
+     */
+    public abstract String[] getRevokedPermissions(String pkgName);
+
+    /**
+     * Sets permissions for a given package.
+     * If the package has a shared user id then this
+     * method will set permissions for that shared user id.
+     * This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#SET_PERMISSIONS} permission
+     *
+     * @param pkgName Name of the package
+     * @param perms String array of the permissions to add
+     * @hide
+     */
+    public abstract void setPermissions(String pkgName, String[] perms);
+
+    /**
+     * Removes permissions previously granted to a package.
+     * If the package has a shared user id then this
+     * method will remove permissions for that shared user id.
+     * This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#REVOKE_PERMISSIONS} permission
+     *
+     * @param pkgName Name of the package
+     * @param perms String array of the permissions to remove
+     * @hide
+     */
+    public abstract void revokePermissions(String pkgName, String[] perms);
+
+    /**
+     * Returns the tags assigned to a given UID. This call will fail if the
+     * calling context lacks the {@link android.Manifest.permission#GET_TAGS}
+     * permission.
+     * @hide
+     */
+    public abstract List<String> getTagsForUid(int uid);
+
+    /**
+     * Returns all tags created by policy. This call will fail if the calling
+     * context lacks the {@link android.Manifest.permission#GET_TAGS}
+     * permission.
+     * @hide
+     */
+    public abstract List<String> getAllTags();
+
+    /**
+     * Associates a tag to a UID. This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#SET_TAGS} permission.
+     * @hide
+     */
+    public abstract boolean addTag(int uid, String tag);
+
+    /**
+     * Removes a tag from a UID. This call will fail if the calling context
+     * lacks the {@link android.Manifest.permission#SET_TAGS} permission.
+     * @hide
+     */
+    public abstract boolean removeTag(int uid, String tag);
 }

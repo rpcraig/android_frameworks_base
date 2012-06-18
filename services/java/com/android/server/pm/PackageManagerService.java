@@ -33,6 +33,7 @@ import com.android.server.IntentResolver;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
+import org.xmlpull.v1.XmlSerializer;
 
 import android.app.ActivityManagerNative;
 import android.app.IActivityManager;
@@ -94,6 +95,7 @@ import android.os.ServiceManager;
 import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.security.SystemKeyStore;
+import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.EventLog;
 import android.util.Log;
@@ -114,6 +116,7 @@ import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.security.NoSuchAlgorithmException;
 import java.security.PublicKey;
 import java.security.cert.CertificateException;
@@ -131,6 +134,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -152,10 +156,14 @@ adb shell am instrument -w -e class com.android.unit_tests.PackageManagerTests c
  */
 public class PackageManagerService extends IPackageManager.Stub {
     static final String TAG = "PackageManager";
+    private static final String TAGPROP_TAG = TAG + "_TAGPROP";
+    private static final String MMAC_DENY = "MMAC_DENIAL:";
     static final boolean DEBUG_SETTINGS = false;
     private static final boolean DEBUG_PREFERRED = false;
     static final boolean DEBUG_UPGRADE = false;
     private static final boolean DEBUG_INSTALL = false;
+    private static final boolean DEBUG_POLICY = true;
+    private static final boolean DEBUG_POLICY_INSTALL = DEBUG_POLICY || false;
     private static final boolean DEBUG_REMOVE = false;
     private static final boolean DEBUG_SHOW_INFO = false;
     private static final boolean DEBUG_PACKAGE_INFO = false;
@@ -315,10 +323,39 @@ public class PackageManagerService extends IPackageManager.Stub {
     // Temporary for building the final shared libraries for an .apk.
     String[] mTmpSharedLibraries = null;
 
+    // Available policy read from mac_permissions.xml that deals
+    // with global signature based stanzas, including any default stanza.
+    private HashMap<Signature, InstallPolicy> mInstallSignaturePolicy =
+            new HashMap<Signature, InstallPolicy>();
+
+    // Available policy read from mac_permissions.xml that deals
+    // with global package stanzas.
+    private HashMap<String, InstallPolicy> mInstallPackagePolicy =
+            new HashMap<String, InstallPolicy>();
+
+    // Available policy read from revoke_permissions.xml
+    private HashMap<String, HashSet<String>> mRevokePermissionPolicy =
+        new HashMap<String, HashSet<String>>();
+
+    // Has the mac_permissions.xml been found
+    private final boolean isMacPolicyEnabled;
+
     // These are the features this devices supports that were read from the
     // etc/permissions.xml file.
     final HashMap<String, FeatureInfo> mAvailableFeatures =
             new HashMap<String, FeatureInfo>();
+    
+    // These are the permissions that were read from the
+    // /etc/permissions.xml file and their security context
+    private final HashMap<String, String> mPermToTagPropTag =
+            new HashMap<String, String>();
+    
+    // These are apps that should not propagate their contexts
+    private final HashSet<String> mTagPropDontProp =
+            new HashSet<String>();
+
+    private final Map<String, Set<String>> mTagPropPolicies =
+            new HashMap<String, Set<String>>();
 
     // All available activities, for your resolving pleasure.
     final ActivityIntentResolver mActivities =
@@ -1047,6 +1084,14 @@ public class PackageManagerService extends IPackageManager.Stub {
                 }
             }
 
+            // Find install policy
+            long startPolicyTime = SystemClock.uptimeMillis();
+            isMacPolicyEnabled = scanPolicy();
+            Slog.i(TAG, "Time to scan install policy: "
+                   + ((SystemClock.uptimeMillis()-startPolicyTime)/1000f)
+                   + " seconds");
+            scanRevokePolicy();
+
             // Find base frameworks (resource packages without code).
             mFrameworkInstallObserver = new AppDirObserver(
                 mFrameworkDir.getPath(), OBSERVER_EVENTS, true);
@@ -1145,6 +1190,8 @@ public class PackageManagerService extends IPackageManager.Stub {
             // can downgrade to reader
             mSettings.writeLPr();
 
+            revokePolicyPermissionsLPw();
+
             EventLog.writeEvent(EventLogTags.BOOT_PROGRESS_PMS_READY,
                     SystemClock.uptimeMillis());
 
@@ -1232,6 +1279,584 @@ public class PackageManagerService extends IPackageManager.Stub {
             }
         }
         mSettings.removePackageLPw(ps.name);
+    }
+
+    boolean scanRevokePolicy() {
+        File dataDir = Environment.getDataDirectory();
+        File rootDir = Environment.getRootDirectory();
+
+        File[] policyFileLocations = new File[]{
+            new File(dataDir, "system/revoke_permissions.xml"),
+            new File(rootDir, "etc/security/revoke_permissions.xml"),
+            null};
+
+        FileReader policyFile = null;
+        int i = 0;
+        while (policyFile == null && policyFileLocations[i] != null) {
+            try {
+                policyFile = new FileReader(policyFileLocations[i]);
+                break;
+            } catch (FileNotFoundException e) {
+                Slog.d(TAG,"Couldn't find revoke permissions file " + policyFileLocations[i]);
+            }
+            i++;
+        }
+
+        if (policyFile == null) {
+            Slog.d(TAG, "No middleware revocation policy found.");
+            return false;
+        }
+
+        Slog.d(TAG, "Middleware revocation policy found.");
+
+        try {
+            XmlPullParser parser = Xml.newPullParser();
+            parser.setInput(policyFile);
+
+            XmlUtils.beginDocument(parser, "revoke-policy");
+
+            while (true) {
+                XmlUtils.nextElement(parser);
+                if (parser.getEventType() == XmlPullParser.END_DOCUMENT) {
+                    break;
+                }
+                String name = parser.getName();
+                if ("package".equals(name)) {
+                    String packageName = parser.getAttributeValue(null, "name");
+                    if (packageName == null) {
+                        Slog.d(TAG, "<package> without name at "
+                               + parser.getPositionDescription() + " in revoke_permissions.xml");
+                    } else {
+                        readRevokePolicy(parser, packageName);
+                    }
+                } else {
+                    Slog.i(TAG, "Got unknown XML element in revoke_permissions.xml: <"+name+">");
+                    XmlUtils.skipCurrentTag(parser);
+                    continue;
+                }
+            }
+            policyFile.close();
+        } catch (XmlPullParserException e) {
+            Slog.w(TAG, "Got execption parsing permissions for revoke_permissions.xml." + e);
+        } catch (IOException e) {
+            Slog.w(TAG, "Got execption parsing permissions for revoke_permissions.xml." + e);
+        }
+        return true;
+    }
+
+    void readRevokePolicy(XmlPullParser parser, String packageName)
+        throws IOException, XmlPullParserException {
+
+        HashSet<String> revokedPerms = new HashSet<String>();
+
+        int outerDepth = parser.getDepth();
+        int type;
+        while ((type=parser.next()) != XmlPullParser.END_DOCUMENT
+               && (type != XmlPullParser.END_TAG
+                   || parser.getDepth() > outerDepth)) {
+            if (type == XmlPullParser.END_TAG
+                || type == XmlPullParser.TEXT) {
+                continue;
+            }
+
+            String tagName = parser.getName();
+            if ("revoke-permission".equals(tagName)) {
+                String permName = parser.getAttributeValue(null, "name");
+                if (permName != null) {
+                    revokedPerms.add(permName);
+                } else {
+                    Slog.d(TAG, "<revoke-permission> without name at "
+                           + parser.getPositionDescription());
+                }
+                XmlUtils.skipCurrentTag(parser);
+            }
+        }
+
+        if (revokedPerms.size() > 0)
+            mRevokePermissionPolicy.put(packageName, revokedPerms);
+    }
+
+    boolean scanPolicy() {
+        File dataDir = Environment.getDataDirectory();
+        File rootDir = Environment.getRootDirectory();
+
+        File[] policyFileLocations = new File[]{
+            new File(dataDir, "system/mac_permissions.xml"),
+            new File(rootDir, "etc/security/mac_permissions.xml"),
+            null};
+
+        FileReader policyFile = null;
+        int i = 0;
+        while (policyFile == null && policyFileLocations[i] != null) {
+            try {
+                policyFile = new FileReader(policyFileLocations[i]);
+                break;
+            } catch (FileNotFoundException e) {
+                Slog.d(TAG,"Couldn't find permissions file " + policyFileLocations[i]);
+            }
+            i++;
+        }
+
+        if (policyFile == null) {
+            Slog.d(TAG, "No mac_permissions.xml policy file. MMAC starting in disabled mode.");
+            return false;
+        }
+
+        Slog.d(TAG, "Middleware policy starting in enabled mode.");
+
+        boolean enforcing = SystemProperties.getBoolean("persist.mac_enforcing_mode", false);
+        String mode = enforcing ? "enforcing" : "permissive";
+        Slog.d(TAG, "Middleware policy starting in " + mode + " mode.");
+
+        try {
+            XmlPullParser parser = Xml.newPullParser();
+            parser.setInput(policyFile);
+
+            XmlUtils.beginDocument(parser, "policy");
+
+            while (true) {
+                XmlUtils.nextElement(parser);
+                if (parser.getEventType() == XmlPullParser.END_DOCUMENT) {
+                    break;
+                }
+                String tagName = parser.getName();
+                if ("signer".equals(tagName)) {
+                    String cert = parser.getAttributeValue(null, "signature");
+                    if (cert != null && !cert.equals("")) {
+                        Signature signature = null;
+                        try {
+                            signature = new Signature(cert);
+                        } catch (IllegalArgumentException e) {
+                            Slog.w(TAG, "'signer' tag with bad signature at " +
+                                   parser.getPositionDescription() + ": " + e);
+                            XmlUtils.skipCurrentTag(parser);
+                            continue;
+                        }
+                        if (signature != null) {
+                            InstallPolicy type = determineInstallPolicyType(parser, true);
+                            if (type != null) {
+                                mInstallSignaturePolicy.put(signature, type);
+                                if (DEBUG_POLICY_INSTALL)
+                                    Log.i(TAG, "<signer>: (" + cert + ") " + type);
+                            } else {
+                                Slog.w(TAG, "Skipping policy stanza format for 'signer' at " +
+                                       parser.getPositionDescription());
+                            }
+                        }
+                    } else {
+                        Slog.w(TAG, "<signer> without valid signature attribute at "
+                               + parser.getPositionDescription() + ". Skipping tag.");
+                        XmlUtils.skipCurrentTag(parser);
+                        continue;
+                    }
+                } else if ("default".equals(tagName)) {
+                    InstallPolicy type = determineInstallPolicyType(parser, true);
+                    if (type != null) {
+                        // we use the null key in the hashset as the 'default' type
+                        mInstallSignaturePolicy.put(null, type);
+                        if (DEBUG_POLICY_INSTALL)
+                            Log.i(TAG, "<default>: " + type);
+                    } else {
+                        Slog.w(TAG, "Skipping policy stanza format for 'default' at " +
+                               parser.getPositionDescription());
+                    }
+                } else if ("package".equals(tagName)) {
+                    String pkgName = parser.getAttributeValue(null, "name");
+                    if (pkgName != null) {
+                        InstallPolicy type = determineInstallPolicyType(parser, false);
+                        if (type != null) {
+                            mInstallPackagePolicy.put(pkgName, type);
+                            if (DEBUG_POLICY_INSTALL)
+                                Log.i(TAG, "<package>: (" + pkgName + ") " + type);
+                        } else {
+                            Slog.w(TAG, "Skipping policy stanza format for 'package' at " +
+                                   parser.getPositionDescription());
+                        }
+                    } else {
+                        Slog.w(TAG, "<package> without valid name attribute at "
+                               + parser.getPositionDescription() + ". Skipping tag.");
+                        XmlUtils.skipCurrentTag(parser);
+                        continue;
+                    }
+                } else if ("tagprop".equalsIgnoreCase(tagName)) {
+                    readTagProp(parser);
+                    
+                } else {
+                    Slog.w(TAG, "Skipping unknown XML element: <"+tagName+"> at " +
+                           parser.getPositionDescription());
+                    XmlUtils.skipCurrentTag(parser);
+                    continue;
+                }
+            }
+            policyFile.close();
+        } catch (XmlPullParserException e) {
+            // how to handle the extreme cases....most likely kill all policy
+            // but what if a policy is not already in place..
+            Slog.w(TAG, "Got execption parsing permissions for mac_permissions.xml." + e);
+        } catch (IOException e) {
+            // how to handle the extreme cases....
+            Slog.w(TAG, "Got execption parsing permissions for mac_permissions.xml." + e);
+        }
+        return true;
+    }
+
+    /**
+     * Takes an install policy stanza and determines the type of policy enforced.
+     * The rules are as follows:
+     * - A blacklist is determined if at least one <deny-permission name="" /> tag
+     *     is found. Zero or more tags are allowed.
+     * - A whitelist is determined if not a blacklist and at least one
+     *     <allow-permission name="" /> tag is found. Zero or more are allowed.
+     * - A wildcard is assigned if no whitelist and no blacklist and at least
+     *     one <allow-all /> tag is found. Zero or more are allowed.
+     * - Zero or more <package name="" > sub elements are allowed. The scope
+     *     of the enforcement for the package is determined by the location of
+     *     the particular package tag. If found outside of a signer or default tag,
+     *     then the package tag has global scope. If found within a signer or default
+     *     tag then it has signatue scope. Meaning, all packages signed with the parent
+     *     cert are mediated within the enclosed package policy stanza.
+     * - In order for a policy stanza to be applied, at least one of the above
+     *     situations must apply. If none of the above cases apply then no policy
+     *     is created for this stanza.
+     * - Strict enforcing of the xml stanza is not enforced in most cases.
+     *     This mainly applies to duplicate tags which are allowed. In the event
+     *     that a tag already exists, the original tag is replaced.
+     * - There are also no checks on the validity of permission names. Although
+     *     valid android permissions are expected, nothing prevents unknowns.
+     * @param XmlPullParser object which points to a valid xml policy tree instance.
+     * @param notInsidePackageTag a boolean representing that we have not already
+     *        recursed inside a <package name=""> sub element. This is in
+     *        place to prevent the <package name="" > tag appearing inside itself.
+     *        at any level.
+     * @return InstallPolicy an InstallPolicy class representing the type
+     *          of policy that was assigned to the stanza. A null value
+     *          can result which indicates no type could be determined.
+     */
+    InstallPolicy determineInstallPolicyType(XmlPullParser parser, boolean notInsidePackageTag)
+        throws IOException, XmlPullParserException {
+
+        final HashSet<String> allowPolicyPerms = new HashSet<String>();
+        final HashSet<String> denyPolicyPerms = new HashSet<String>();
+
+        final HashMap<String, InstallPolicy> packagePolicy =
+            new HashMap<String, InstallPolicy>();
+
+        int type;
+        int outerDepth = parser.getDepth();
+        boolean allowAll = false;
+        while ((type=parser.next()) != XmlPullParser.END_DOCUMENT
+               && (type != XmlPullParser.END_TAG
+                   || parser.getDepth() > outerDepth)) {
+            if (type == XmlPullParser.END_TAG
+                || type == XmlPullParser.TEXT) {
+                continue;
+            }
+
+            String tagName = parser.getName();
+            if ("allow-permission".equals(tagName)) {
+                String permName = parser.getAttributeValue(null, "name");
+                if (permName != null) {
+                    allowPolicyPerms.add(permName);
+                } else {
+                    Slog.w(TAG, "<allow-permission> without valid name attribute at "
+                           + parser.getPositionDescription() + ". Skipping tag.");
+                }
+                XmlUtils.skipCurrentTag(parser);
+                continue;
+            } else if ("deny-permission".equals(tagName)) {
+                String permName = parser.getAttributeValue(null, "name");
+                if (permName != null) {
+                    denyPolicyPerms.add(permName);
+                } else {
+                    Slog.w(TAG, "<deny-permission> without valid name attribute at "
+                           + parser.getPositionDescription() + ". Skipping tag.");
+                }
+                XmlUtils.skipCurrentTag(parser);
+                continue;
+            } else if ("allow-all".equals(tagName)) {
+                allowAll = true;
+                // skip tag....
+            } else if (notInsidePackageTag && "package".equals(tagName)) {
+                String pkgName = parser.getAttributeValue(null, "name");
+                if (pkgName != null) {
+                    InstallPolicy packageType = determineInstallPolicyType(parser, false);
+                    if (packageType != null) {
+                        packagePolicy.put(pkgName, packageType);
+                        if (DEBUG_POLICY_INSTALL)
+                            Log.i(TAG, "<package>: (" + pkgName + ") " + packageType);
+                    } else {
+                        Slog.w(TAG, "Skipping policy stanza format for 'package' at " +
+                               parser.getPositionDescription());
+                    }
+                } else {
+                    Slog.w(TAG, "<package> without valid name attribute at "
+                           + parser.getPositionDescription() + ". Skipping tag.");
+                    XmlUtils.skipCurrentTag(parser);
+                    continue;
+                }
+            } else {
+                Slog.w(TAG, "Skipping unknown XML element: <"+tagName+"> at " +
+                       parser.getPositionDescription());
+                XmlUtils.skipCurrentTag(parser);
+                continue;
+            }
+        }
+
+        // Order is important. Provide the least amount of privelage when in doubt. 
+        InstallPolicy permPolicyType = null;
+        if (denyPolicyPerms.size() > 0)
+            permPolicyType = new BlackListPolicy(denyPolicyPerms, packagePolicy);
+        else if (allowPolicyPerms.size() > 0)
+            permPolicyType = new WhiteListPolicy(allowPolicyPerms, packagePolicy);
+        else if (allowAll)
+            permPolicyType = new InstallPolicy(null, packagePolicy);
+
+        /**
+         * If we only have <package name="" > sub elements we are skipping that policy
+         * stanza for now. Meaning, a signer or default tag with only package sub
+         * elements is ignored.
+         */
+
+        return permPolicyType;
+    }
+
+    /**
+     * Base class for all install policy classes.
+     * Also doubles as the wildcard (allow everything) policy.
+     */
+    public class InstallPolicy {
+
+        final HashSet<String> policyPerms;
+        final HashMap<String, InstallPolicy> packagePolicy;
+
+        InstallPolicy(HashSet<String> policyPerms, HashMap<String, InstallPolicy> packagePolicy) {
+            this.policyPerms = policyPerms;
+            this.packagePolicy = packagePolicy;
+        }
+
+        public boolean passedPolicyChecks(PackageParser.Package pkg) {
+            // ensure that local package policy takes precedence
+            if (packagePolicy.containsKey(pkg.packageName))
+                return packagePolicy.get(pkg.packageName).passedPolicyChecks(pkg);
+
+            return true;
+        }
+
+        public String toString() {
+            StringBuilder out = new StringBuilder();
+            out.append("[");
+            if (policyPerms != null) {
+                out.append(TextUtils.join(",", new TreeSet<String>(policyPerms)));
+            } else {
+                out.append("allow-all");
+            }
+            out.append("]");
+            return out.toString();
+        }
+    }
+
+    /**
+     * Whitelist policy class. Checks that the set of requested permissions
+     * is a subset of the maximal set of allowable permissions.
+     */
+    public class WhiteListPolicy extends InstallPolicy {
+
+        WhiteListPolicy(HashSet<String> policyPerms, HashMap<String, InstallPolicy> packagePolicy) {
+            super(policyPerms, packagePolicy);
+        }
+
+        @Override
+        public boolean passedPolicyChecks(PackageParser.Package pkg) {
+            // ensure that local package policy takes precedence
+            if (packagePolicy.containsKey(pkg.packageName))
+                return packagePolicy.get(pkg.packageName).passedPolicyChecks(pkg);
+
+            if (!policyPerms.containsAll(pkg.requestedPermissions)) {
+                Slog.w(TAG, MMAC_DENY + " Policy whitelist rejected package "
+                       + pkg.packageName + ". The maximal set is: " + toString());
+                return false;
+            }
+
+            return true;
+        }
+
+        @Override
+        public String toString() {
+            return "allowed-permissions => " + super.toString();
+        }
+    }
+
+    /**
+     * Blacklist policy class. Ensures that all requested permissions
+     * are not on the denied list of permissions.
+     */
+    public class BlackListPolicy extends InstallPolicy {
+
+        BlackListPolicy(HashSet<String> policyPerms, HashMap<String, InstallPolicy> packagePolicy) {
+            super(policyPerms, packagePolicy);
+        }
+
+        @Override
+        public boolean passedPolicyChecks(PackageParser.Package pkg) {
+            // ensure that local package policy takes precedence
+            if (packagePolicy.containsKey(pkg.packageName))
+                return packagePolicy.get(pkg.packageName).passedPolicyChecks(pkg);
+
+            Iterator itr = pkg.requestedPermissions.iterator();
+            while (itr.hasNext()) {
+                String perm = (String)itr.next();
+                if (policyPerms.contains(perm)) {
+                    Slog.w(TAG, MMAC_DENY + " Policy blacklisted permission " + perm +
+                           " for package " + pkg.packageName);
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public String toString() {
+            return "denied-permissions => " + super.toString();
+        }
+    }
+    
+    private void readTagProp(XmlPullParser parser)
+            throws XmlPullParserException, IOException {
+
+        int outerDepth = parser.getDepth();
+        int type;
+        while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
+                && (type != XmlPullParser.END_TAG
+                || parser.getDepth() > outerDepth)) {
+            if (type == XmlPullParser.END_TAG
+                    || type == XmlPullParser.TEXT) {
+                continue;
+            }
+
+            String element = parser.getName();
+
+            if ("tag".equalsIgnoreCase(element)) {
+                String tag = parser.getAttributeValue(null, "name");
+                if (tag == null) {
+                    Slog.e(TAGPROP_TAG, "<tag> without name at "
+                            + parser.getPositionDescription());
+                    XmlUtils.skipCurrentTag(parser);
+                } else {
+                    Slog.v(TAGPROP_TAG, "Found <tag> at "
+                            + parser.getPositionDescription());
+                    readTagPropTag(parser, tag);
+                }
+                
+            } else if ("policy".equalsIgnoreCase(element)) {
+                String name = parser.getAttributeValue(null, "name");
+                if (name == null) {
+                    Slog.e(TAGPROP_TAG, "<policy> without name at "
+                            + parser.getPositionDescription());
+                    XmlUtils.skipCurrentTag(parser);
+                } else {
+                    Slog.v(TAGPROP_TAG, "Found <policy> " + name + " at "
+                            + parser.getPositionDescription());
+                    readTagPropPolicy(parser, name);
+                }
+                
+            } else if ("dont-propagate".equals(element)) {
+                String appName = parser.getAttributeValue(null, "app-name");
+                if (appName == null) {
+                    Slog.e(TAGPROP_TAG, "<dont-propagate> without name at "
+                            + parser.getPositionDescription());
+                    XmlUtils.skipCurrentTag(parser);
+                } else {
+                    Slog.v(TAGPROP_TAG, "Found <dont-propagate> " + appName
+                            + " at " + parser.getPositionDescription());
+                    mTagPropDontProp.add(appName);
+                }
+
+            } else {
+                Slog.i(TAGPROP_TAG, "Got unknown XML element in <" + element + "> at "
+                        + parser.getPositionDescription());
+                XmlUtils.skipCurrentTag(parser);
+            }
+        }
+        
+        Slog.d(TAGPROP_TAG, "Tags: " + mPermToTagPropTag.toString());
+        Slog.d(TAGPROP_TAG, "Dont-prop: " + mTagPropDontProp.toString());
+    }
+
+    private void readTagPropTag(XmlPullParser parser, String tag)
+            throws XmlPullParserException, IOException {
+
+        int outerDepth = parser.getDepth();
+        int type;
+        while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
+                && (type != XmlPullParser.END_TAG
+                || parser.getDepth() > outerDepth)) {
+            if (type == XmlPullParser.END_TAG
+                    || type == XmlPullParser.TEXT) {
+                continue;
+            }
+
+            String element = parser.getName();
+
+            if ("permission".equalsIgnoreCase(element)) {
+                String permName = parser.getAttributeValue(null, "name");
+                if (permName != null) {
+                    mPermToTagPropTag.put(permName, tag);
+                    
+                } else {
+                    Slog.e(TAGPROP_TAG, "<permission> without name at "
+                            + parser.getPositionDescription());
+                    XmlUtils.skipCurrentTag(parser);
+                }
+            } else {
+                Slog.i(TAGPROP_TAG, "Got unknown XML element in <" + element +
+                        "> at " + parser.getPositionDescription());
+                XmlUtils.skipCurrentTag(parser);
+            }
+        }
+    }
+
+    private void readTagPropPolicy(XmlPullParser parser, String name)
+            throws XmlPullParserException, IOException {
+        
+        Set<String> pol = new HashSet<String>();
+        
+        int outerDepth = parser.getDepth();
+        int type;
+        while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
+                && (type != XmlPullParser.END_TAG
+                || parser.getDepth() > outerDepth)) {
+            if (type == XmlPullParser.END_TAG
+                    || type == XmlPullParser.TEXT) {
+                continue;
+            }
+
+            String element = parser.getName();
+            
+            if ("tag".equalsIgnoreCase(element)) {
+                String tag = parser.getAttributeValue(null, "name");
+                if (tag == null) {
+                    Slog.e(TAGPROP_TAG, "<tag> without name at "
+                            + parser.getPositionDescription());
+                    XmlUtils.skipCurrentTag(parser);
+                } else if (!mPermToTagPropTag.containsValue(tag)) {
+                    Slog.e(TAGPROP_TAG, "Tag " + tag + " given at " +
+                            parser.getPositionDescription()+" is undefined. "+
+                            "Policy " + name + " will not be implemented.");
+                    pol = null;
+                    XmlUtils.skipCurrentTag(parser);
+                } else {
+                    if (pol != null)
+                        pol.add(tag);
+                }
+            } else {
+                Slog.i(TAGPROP_TAG, "Got unknown XML element in <" + element +
+                        "> at " + parser.getPositionDescription());
+                XmlUtils.skipCurrentTag(parser);
+            }
+        }
+        
+        if (pol != null && pol.size() > 0)
+            mTagPropPolicies.put(name, pol);
     }
 
     void readPermissions() {
@@ -1562,7 +2187,8 @@ public class PackageManagerService extends IPackageManager.Stub {
             if (p != null) {
                 final PackageSetting ps = (PackageSetting)p.mExtras;
                 final SharedUserSetting suid = ps.sharedUser;
-                return suid != null ? suid.gids : ps.gids;
+                return suid != null ? removeInts(suid.gids, suid.revokedGids)
+                    : removeInts(ps.gids, ps.revokedGids);
             }
         }
         // stupid thing to indicate an error.
@@ -1838,10 +2464,10 @@ public class PackageManagerService extends IPackageManager.Stub {
             if (p != null && p.mExtras != null) {
                 PackageSetting ps = (PackageSetting)p.mExtras;
                 if (ps.sharedUser != null) {
-                    if (ps.sharedUser.grantedPermissions.contains(permName)) {
+                    if (ps.sharedUser.effectivePermissions.contains(permName)) {
                         return PackageManager.PERMISSION_GRANTED;
                     }
-                } else if (ps.grantedPermissions.contains(permName)) {
+                } else if (ps.effectivePermissions.contains(permName)) {
                     return PackageManager.PERMISSION_GRANTED;
                 }
             }
@@ -1854,7 +2480,7 @@ public class PackageManagerService extends IPackageManager.Stub {
             Object obj = mSettings.getUserIdLPr(uid);
             if (obj != null) {
                 GrantedPermissions gp = (GrantedPermissions)obj;
-                if (gp.grantedPermissions.contains(permName)) {
+                if (gp.effectivePermissions.contains(permName)) {
                     return PackageManager.PERMISSION_GRANTED;
                 }
             } else {
@@ -1865,6 +2491,126 @@ public class PackageManagerService extends IPackageManager.Stub {
             }
         }
         return PackageManager.PERMISSION_DENIED;
+    }
+    
+    public boolean passedCommsPolicy(int fromUid, int toUid) {
+
+        //Slog.d(TAGPROP_TAG, "Checking uid " + fromUid + " to uid " + toUid);
+
+        /* XXX Assume that system applications are not leaking info. The 
+         * Woodpecker work at NDSS '12 shows this is a bad idea, but lets use 
+         * it for now to get a working system
+         */
+        if (fromUid < Process.FIRST_APPLICATION_UID
+                || toUid < Process.FIRST_APPLICATION_UID) {
+            //Slog.d(TAGPROP_TAG, "Checking uid " + fromUid + " to uid " +
+            //    toUid + " -> EXCEPTED");
+            return true;
+        }
+
+        Slog.d(TAGPROP_TAG, "Checking uid " + fromUid + " to uid " + toUid);
+
+        synchronized (mPackages) {
+            /* XXX Crude hack to make dont-propagate into a whitelist. Need this
+             * for now to get a working system
+             */
+            for (String appName : mTagPropDontProp) {
+                int appUid = mPackages.get(appName).applicationInfo.uid;
+                if (fromUid == appUid || toUid == appUid) {
+                    Slog.d(TAGPROP_TAG, "Checking uid " + fromUid +
+                            " to uid " + toUid + " -> EXCEPTED");
+                    return true;
+                }
+            }
+
+            Object fromObj = mSettings.getUserIdLPr(fromUid);
+            Object toObj = mSettings.getUserIdLPr(toUid);
+            if (fromObj != null && toObj != null) {
+                GrantedPermissions fromGp = (GrantedPermissions)fromObj;
+                GrantedPermissions toGp = (GrantedPermissions)toObj;
+                HashSet<String> fromTags = fromGp.tagPropTags;
+                HashSet<String> toTags = toGp.tagPropTags;
+
+                //DEBUG
+                String fromPkg = null, toPkg = null;
+                for (PackageParser.Package p : mPackages.values()) {
+                    if (p.applicationInfo.uid == toUid)
+                        toPkg = p.packageName;
+                    else if (p.applicationInfo.uid == fromUid)
+                        fromPkg = p.packageName;
+                }
+
+                Slog.d(TAGPROP_TAG, "From uid " + fromUid + " (" + fromPkg +")"
+                        + " has tags " + fromTags);
+                Slog.d(TAGPROP_TAG, "To uid " + toUid + " (" + toPkg +")"
+                        + " has tags " + toTags);
+
+                if (fromTags.equals(toTags)) {
+                    Slog.d(TAGPROP_TAG, "Both UIDs have same tags");
+                    return true;
+                }
+
+                HashSet<String> unionTags = new HashSet<String>(
+                        fromTags.size() + toTags.size());
+                unionTags.addAll(fromTags);
+                unionTags.addAll(toTags);
+
+                for (String polName : mTagPropPolicies.keySet()) {
+
+                    Set<String> pol = mTagPropPolicies.get(polName);
+
+                    if (fromTags.containsAll(pol) && toTags.containsAll(pol)) {
+                        // Allow comms between apps if there is no priv esc
+                        Slog.d(TAGPROP_TAG, "Both UIDs already have denied " +
+                        		"tags in policy " + polName);
+
+                    } else if (unionTags.containsAll(pol)) {
+                        // Fail fast if two apps together exceed authorization
+                        Slog.e(TAGPROP_TAG, "DENIAL: Union of tags"
+                                + " from "+fromUid+" ("+fromPkg+") "+fromTags
+                                + " to " + toUid + " ("+toPkg+") " + toTags
+                                + " matched policy " + polName);
+                        StringBuilder sb = new StringBuilder();
+                        //XXX DEBUGGING
+                        Slog.v(TAGPROP_TAG, sb.toString(), new Exception());
+
+                        return false;
+                    }
+                }
+
+                //Propagate tags -- XXX should I make a copy of the HashSets?
+                boolean propagate = true;
+                propagate = fromUid >= Process.FIRST_APPLICATION_UID;
+                propagate = toUid >= Process.FIRST_APPLICATION_UID;
+                if (propagate) {
+                    for (String appName : mTagPropDontProp) {
+                        int appUid = mPackages.get(appName).applicationInfo.uid;
+                        if (fromUid == appUid || toUid == appUid) {
+                            propagate = false;
+                            break;
+                        }
+                    }
+                }
+                if (propagate) {
+                    fromGp.tagPropTags.addAll(toTags);
+                    toGp.tagPropTags.addAll(fromTags);
+                    Slog.i(TAGPROP_TAG, "PROP: Propagated tags " +
+                    		"to uid "+ fromUid + ": " + fromGp.tagPropTags);
+                    Slog.i(TAGPROP_TAG, "PROP: Propagated tags " +
+                    		"to uid " + toUid +": " + toGp.tagPropTags);
+
+                } else {
+                    Slog.d(TAGPROP_TAG, "Uid excepted from tags propagation");
+                }
+
+            } else {
+                //XXX shut this up for now -- figure out when this occurs
+                //Slog.d(TAGPROP_TAG, "From uid " + fromUid + " has no settings objects");
+                //Slog.d(TAGPROP_TAG, "To uid " + toUid + " has no settings objects");
+            }
+        }
+
+        return true;
     }
 
     private BasePermission findPermissionTreeLP(String permName) {
@@ -3125,6 +3871,56 @@ public class PackageManagerService extends IPackageManager.Stub {
         }
     }
 
+    private boolean passInstallPolicyChecks(PackageParser.Package pkg) {
+
+        if (pkg.requestedPermissions.isEmpty()) {
+            return true;
+        }
+
+        /**
+         * Order of policy checks:
+         *     valid X.509 cert policy with per-package specified
+         *     valid X.509 cert policy with global check
+         *       the per-package and global checks on X.509 certs happen
+         *       transparently with the call to passedPolicyChecks(pkg)
+         *     global per-package check
+         *     default check (null signature)
+         */
+
+        // APKs can have mulitple signatures. We just want one that passes.
+        for (Signature s : pkg.mSignatures) {
+            if (s == null) {
+                continue;
+            }
+
+            /**
+             * First check for a valid policy based on a non default signature. 
+             * The 'default' will be checked last.
+             */
+            if (mInstallSignaturePolicy.containsKey(s)) {
+                if (mInstallSignaturePolicy.get(s).passedPolicyChecks(pkg)) {
+                    return true;
+                }
+            }
+        }
+
+        // note: if an app signature has been found in policy yet the signer
+        // stanza check has failed, we still proceed to the next set of checks.
+
+        // check for global per-package policy
+        if (mInstallPackagePolicy.containsKey(pkg.packageName)) {
+            return mInstallPackagePolicy.get(pkg.packageName).passedPolicyChecks(pkg);
+        }
+
+        // Check for 'default' policy
+        if (mInstallSignaturePolicy.containsKey(null)) {
+            return mInstallSignaturePolicy.get(null).passedPolicyChecks(pkg);
+        }
+
+        // If we get here it's because this package had no policy
+        return false;
+    }
+
     private PackageParser.Package scanPackageLI(PackageParser.Package pkg,
             int parseFlags, int scanMode, long currentTime) {
         File scanFile = new File(pkg.mScanPath);
@@ -3136,6 +3932,16 @@ public class PackageManagerService extends IPackageManager.Stub {
             return null;
         }
         mScanningPath = scanFile;
+
+        // Verify requested permissions are allowed by policy.
+        // Should we move this check after granted permissions are resolved...
+        if (isMacPolicyEnabled && !passInstallPolicyChecks(pkg) &&
+                SystemProperties.getBoolean("persist.mac_enforcing_mode", false)) {
+            Slog.w(TAG, "Installing application package " + pkg.packageName
+                   + " failed due to policy.");
+            mLastScanError = PackageManager.INSTALL_FAILED_POLICY_REJECTED_PERMISSION;
+            return null;
+        }
 
         if ((parseFlags&PackageParser.PARSE_IS_SYSTEM) != 0) {
             pkg.applicationInfo.flags |= ApplicationInfo.FLAG_SYSTEM;
@@ -4177,13 +4983,24 @@ public class PackageManagerService extends IPackageManager.Stub {
             for (PackageParser.Package pkg : mPackages.values()) {
                 if (pkg != pkgInfo) {
                     grantPermissionsLPw(pkg, replaceAll);
+                    updateRevokeInfo(pkg);
                 }
             }
         }
         
         if (pkgInfo != null) {
             grantPermissionsLPw(pkgInfo, replace);
+            updateRevokeInfo(pkgInfo);
         }
+    }
+
+    private void updateRevokeInfo(PackageParser.Package pkg) {
+        final PackageSetting ps = (PackageSetting)pkg.mExtras;
+        if (ps == null) {
+            return;
+        }
+        final GrantedPermissions gp = ps.sharedUser != null ? ps.sharedUser : ps;
+        updateEffectivePermissions(gp);
     }
 
     private void grantPermissionsLPw(PackageParser.Package pkg, boolean replace) {
@@ -4332,6 +5149,13 @@ public class PackageManagerService extends IPackageManager.Stub {
             ps.permissionsFixed = true;
         }
         ps.haveGids = true;
+        
+        for (String perm : gp.grantedPermissions) {
+            String tag = mPermToTagPropTag.get(perm);
+            if (tag != null)
+                gp.tagPropTags.add(tag);
+        }
+        Slog.w(TAG, "Package " + pkg.packageName + " has tags " + gp.tagPropTags);
     }
     
     private final class ActivityIntentResolver
@@ -4899,6 +5723,123 @@ public class PackageManagerService extends IPackageManager.Stub {
 
         private final String mRootDir;
         private final boolean mIsRom;
+    }
+
+    public String[] getGrantedPermissions(final String pkgName) {
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.GET_PERMISSIONS, null);
+        synchronized (mPackages) {
+            return getPermissionsLPw(pkgName, "granted");
+        }
+    }
+
+    public String[] getRevokedPermissions(final String pkgName) {
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.GET_PERMISSIONS, null);
+        synchronized (mPackages) {
+            return getPermissionsLPw(pkgName, "revoked");
+        }
+    }
+
+    public void revokePermissions(final String pkgName, final String[] perms) {
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.REVOKE_PERMISSIONS, null);
+        synchronized (mPackages) {
+            revokePermissionsLPw(pkgName, perms);
+        }
+    }
+
+    public void setPermissions(final String pkgName, final String[] perms) {
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.SET_PERMISSIONS, null);
+        synchronized (mPackages) {
+            setPermissionsLPw(pkgName, perms);
+        }
+    }
+
+    private void revokePolicyPermissionsLPw() {
+        for (Iterator i = mRevokePermissionPolicy.entrySet().iterator(); i.hasNext();) {
+            Map.Entry pairs = (Map.Entry)i.next();
+            String pkgName = (String)pairs.getKey();
+            HashSet<String> perms = (HashSet<String>)pairs.getValue();
+            revokePermissionsLPw(pkgName, perms.toArray(new String[0]));
+        }
+    }
+
+    private String[] getPermissionsLPw(final String pkgName, String type) {
+
+        String result[] = null;
+        final PackageParser.Package p = mPackages.get(pkgName);
+        if (p != null && p.mExtras != null) {
+            final PackageSetting ps = (PackageSetting)p.mExtras;
+            final GrantedPermissions gp = ps.sharedUser != null ? ps.sharedUser : ps;
+            if (type.equals("granted")) {
+                result = new String[gp.grantedPermissions.size()];
+                gp.grantedPermissions.toArray(result);
+            } else if (type.equals("revoked")) {
+                result = new String[gp.revokedPermissions.size()];
+                gp.revokedPermissions.toArray(result);
+            }
+        }
+        return result;
+    }
+
+    private void revokePermissionsLPw(final String pkgName, final String[] perms) {
+
+        final PackageParser.Package p = mPackages.get(pkgName);
+        if (p != null && p.mExtras != null && perms != null) {
+            final PackageSetting ps = (PackageSetting)p.mExtras;
+            final GrantedPermissions gp = ps.sharedUser != null ? ps.sharedUser : ps;
+            // system uid permissions are basically exempt anyways so ignore them
+            if (p.applicationInfo.uid != Process.SYSTEM_UID) {
+                boolean permChange = false;
+                for (String perm : perms) {
+                    // only allow revoked perms of the original granted set
+                    if (gp.grantedPermissions.contains(perm)) {
+                        gp.revokedPermissions.add(perm);
+                        final BasePermission bp = mSettings.mPermissions.get(perm);
+                        gp.revokedGids = appendInts(gp.revokedGids, bp.gids);
+                        permChange = true;
+                    }
+                }
+                if (permChange) {
+                    updateEffectivePermissions(gp);
+                    mSettings.writeLPr();
+                }
+            }
+        }
+    }
+
+    private void setPermissionsLPw(final String pkgName, final String[] perms) {
+
+        final PackageParser.Package p = mPackages.get(pkgName);
+        if (p != null && p.mExtras != null && perms != null) {
+            final PackageSetting ps = (PackageSetting)p.mExtras;
+            final GrantedPermissions gp = ps.sharedUser != null ? ps.sharedUser : ps;
+            if (p.applicationInfo.uid != Process.SYSTEM_UID) {
+                boolean permChange = false;
+                for (String perm : perms) {
+                    // only allow a permission to be set that was previously revoked
+                    if (gp.revokedPermissions.remove(perm)) {
+                        final BasePermission bp = mSettings.mPermissions.get(perm);
+                        gp.revokedGids = removeInts(gp.revokedGids, bp.gids);
+                        permChange = true;
+                    } else {
+                        Log.d(TAG, "Can't set permission " + perm + " for package " + pkgName);
+                    }
+                }
+                if (permChange) {
+                    updateEffectivePermissions(gp);
+                    mSettings.writeLPr();
+                }
+            }
+        }
+    }
+
+    public static void updateEffectivePermissions(final GrantedPermissions gp) {
+        gp.effectivePermissions.clear();
+        gp.effectivePermissions.addAll(gp.grantedPermissions);
+        gp.effectivePermissions.removeAll(gp.revokedPermissions);
     }
 
     /* Called when a downloaded package installation has been confirmed by the user */
@@ -8682,5 +9623,81 @@ public class PackageManagerService extends IPackageManager.Stub {
         synchronized (mPackages) {
             return mSettings.getVerifierDeviceIdentityLPw();
         }
+    }
+    
+    // Here begins functions for the Tag propagation for the public api of PackageManager
+    @Override
+    public List<String> getTagsForUid(int uid) {
+        
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.GET_TAGS, null);
+        
+        synchronized (mPackages) {
+            GrantedPermissions gp = (GrantedPermissions) mSettings.getUserIdLPr(
+                    uid);
+            if (null == gp)
+                return null;
+            
+            List<String> tags = new ArrayList<String>(gp.tagPropTags.size());
+            tags.addAll(gp.tagPropTags);
+            return tags;
+        }
+    }
+    
+    //XXX Should this be bundled into a PermissionInfo structure?
+    @Override
+    public List<String> getAllTags() {
+        
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.GET_TAGS, null);
+        
+        ArrayList<String> list = new ArrayList<String>(
+                new HashSet<String>(mPermToTagPropTag.values()));
+        Collections.sort(list);
+        return list;
+    }
+    
+    @Override
+    public boolean addTag(int uid, String tag) {
+        
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.SET_TAGS, null);
+        
+        if (uid < FIRST_APPLICATION_UID) {
+            Slog.e(TAG, "Not allowed to add tag for uid " + uid);
+            return false;
+        }
+        synchronized (mPackages) {
+            GrantedPermissions gp = (GrantedPermissions) mSettings.getUserIdLPr(
+                    uid);
+            if (null == gp)
+                return false;
+            
+            //TODO validate the tag string
+            gp.tagPropTags.add(tag);
+        }
+        return true;
+    }
+    
+    @Override
+    public boolean removeTag(int uid, String tag) {
+        
+        mContext.enforceCallingOrSelfPermission(
+                android.Manifest.permission.SET_TAGS, null);
+        
+        if (uid < FIRST_APPLICATION_UID) {
+            Slog.e(TAG, "Not allowed to remove tag for uid " + uid);
+            return false;
+        }
+        synchronized (mPackages) {
+            GrantedPermissions gp = (GrantedPermissions) mSettings.getUserIdLPr(
+                    uid);
+            if (null == gp)
+                return false;
+            
+            //TODO validate the tag string
+            gp.tagPropTags.remove(tag);
+        }
+        return true;
     }
 }

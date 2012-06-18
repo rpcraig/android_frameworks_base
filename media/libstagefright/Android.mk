@@ -133,6 +133,7 @@ ifneq ($(strip $(ARCH_ARM_HAVE_ARMV7A)),true)
 ifneq ($(TARGET_ARCH),x86)
      USE_ALT_HTTP := true
 endif
+endif
 
 ifeq ($(TARGET_ARCH),arm)
   ifneq ($(strip $(ARCH_ARM_HAVE_ARMV7A)),true)
